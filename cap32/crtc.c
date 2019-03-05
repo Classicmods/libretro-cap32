@@ -41,6 +41,7 @@
 #include "cap32.h"
 #include "crtc.h"
 #include "z80.h"
+#include "asic.h"
 
 extern t_CPC CPC;
 extern t_CRTC CRTC;
@@ -84,6 +85,7 @@ uint8_t HorzPix[49];
 uint8_t RendBuff[800];
 uint8_t *RendWid, *RendOut;
 uint32_t *RendStart, *RendPos;
+uint32_t PrData[6]; // used in CPC+
 
 uint16_t MAXlate[0x7400];
 
@@ -428,39 +430,40 @@ uint32_t M1hMap[0x100] = {
    0x01010103,0x03010103,0x01030103,0x03030103,0x01010303,0x03010303,0x01030303,0x03030303
 };
 
+// 0x21 = 33 is the anti-aliasing color for mode 2 in halved resolution
 uint32_t M2hMap[0x100] = {
-   0x00000000,0x12000000,0x12000000,0x01000000,0x00120000,0x12120000,0x12120000,0x01120000,
-   0x00120000,0x12120000,0x12120000,0x01120000,0x00010000,0x12010000,0x12010000,0x01010000,
-   0x00001200,0x12001200,0x12001200,0x01001200,0x00121200,0x12121200,0x12121200,0x01121200,
-   0x00121200,0x12121200,0x12121200,0x01121200,0x00011200,0x12011200,0x12011200,0x01011200,
-   0x00001200,0x12001200,0x12001200,0x01001200,0x00121200,0x12121200,0x12121200,0x01121200,
-   0x00121200,0x12121200,0x12121200,0x01121200,0x00011200,0x12011200,0x12011200,0x01011200,
-   0x00000100,0x12000100,0x12000100,0x01000100,0x00120100,0x12120100,0x12120100,0x01120100,
-   0x00120100,0x12120100,0x12120100,0x01120100,0x00010100,0x12010100,0x12010100,0x01010100,
-   0x00000012,0x12000012,0x12000012,0x01000012,0x00120012,0x12120012,0x12120012,0x01120012,
-   0x00120012,0x12120012,0x12120012,0x01120012,0x00010012,0x12010012,0x12010012,0x01010012,
-   0x00001212,0x12001212,0x12001212,0x01001212,0x00121212,0x12121212,0x12121212,0x01121212,
-   0x00121212,0x12121212,0x12121212,0x01121212,0x00011212,0x12011212,0x12011212,0x01011212,
-   0x00001212,0x12001212,0x12001212,0x01001212,0x00121212,0x12121212,0x12121212,0x01121212,
-   0x00121212,0x12121212,0x12121212,0x01121212,0x00011212,0x12011212,0x12011212,0x01011212,
-   0x00000112,0x12000112,0x12000112,0x01000112,0x00120112,0x12120112,0x12120112,0x01120112,
-   0x00120112,0x12120112,0x12120112,0x01120112,0x00010112,0x12010112,0x12010112,0x01010112,
-   0x00000012,0x12000012,0x12000012,0x01000012,0x00120012,0x12120012,0x12120012,0x01120012,
-   0x00120012,0x12120012,0x12120012,0x01120012,0x00010012,0x12010012,0x12010012,0x01010012,
-   0x00001212,0x12001212,0x12001212,0x01001212,0x00121212,0x12121212,0x12121212,0x01121212,
-   0x00121212,0x12121212,0x12121212,0x01121212,0x00011212,0x12011212,0x12011212,0x01011212,
-   0x00001212,0x12001212,0x12001212,0x01001212,0x00121212,0x12121212,0x12121212,0x01121212,
-   0x00121212,0x12121212,0x12121212,0x01121212,0x00011212,0x12011212,0x12011212,0x01011212,
-   0x00000112,0x12000112,0x12000112,0x01000112,0x00120112,0x12120112,0x12120112,0x01120112,
-   0x00120112,0x12120112,0x12120112,0x01120112,0x00010112,0x12010112,0x12010112,0x01010112,
-   0x00000001,0x12000001,0x12000001,0x01000001,0x00120001,0x12120001,0x12120001,0x01120001,
-   0x00120001,0x12120001,0x12120001,0x01120001,0x00010001,0x12010001,0x12010001,0x01010001,
-   0x00001201,0x12001201,0x12001201,0x01001201,0x00121201,0x12121201,0x12121201,0x01121201,
-   0x00121201,0x12121201,0x12121201,0x01121201,0x00011201,0x12011201,0x12011201,0x01011201,
-   0x00001201,0x12001201,0x12001201,0x01001201,0x00121201,0x12121201,0x12121201,0x01121201,
-   0x00121201,0x12121201,0x12121201,0x01121201,0x00011201,0x12011201,0x12011201,0x01011201,
-   0x00000101,0x12000101,0x12000101,0x01000101,0x00120101,0x12120101,0x12120101,0x01120101,
-   0x00120101,0x12120101,0x12120101,0x01120101,0x00010101,0x12010101,0x12010101,0x01010101
+   0x00000000,0x21000000,0x21000000,0x01000000,0x00210000,0x21210000,0x21210000,0x01210000,
+   0x00210000,0x21210000,0x21210000,0x01210000,0x00010000,0x21010000,0x21010000,0x01010000,
+   0x00002100,0x21002100,0x21002100,0x01002100,0x00212100,0x21212100,0x21212100,0x01212100,
+   0x00212100,0x21212100,0x21212100,0x01212100,0x00012100,0x21012100,0x21012100,0x01012100,
+   0x00002100,0x21002100,0x21002100,0x01002100,0x00212100,0x21212100,0x21212100,0x01212100,
+   0x00212100,0x21212100,0x21212100,0x01212100,0x00012100,0x21012100,0x21012100,0x01012100,
+   0x00000100,0x21000100,0x21000100,0x01000100,0x00210100,0x21210100,0x21210100,0x01210100,
+   0x00210100,0x21210100,0x21210100,0x01210100,0x00010100,0x21010100,0x21010100,0x01010100,
+   0x00000021,0x21000021,0x21000021,0x01000021,0x00210021,0x21210021,0x21210021,0x01210021,
+   0x00210021,0x21210021,0x21210021,0x01210021,0x00010021,0x21010021,0x21010021,0x01010021,
+   0x00002121,0x21002121,0x21002121,0x01002121,0x00212121,0x21212121,0x21212121,0x01212121,
+   0x00212121,0x21212121,0x21212121,0x01212121,0x00012121,0x21012121,0x21012121,0x01012121,
+   0x00002121,0x21002121,0x21002121,0x01002121,0x00212121,0x21212121,0x21212121,0x01212121,
+   0x00212121,0x21212121,0x21212121,0x01212121,0x00012121,0x21012121,0x21012121,0x01012121,
+   0x00000121,0x21000121,0x21000121,0x01000121,0x00210121,0x21210121,0x21210121,0x01210121,
+   0x00210121,0x21210121,0x21210121,0x01210121,0x00010121,0x21010121,0x21010121,0x01010121,
+   0x00000021,0x21000021,0x21000021,0x01000021,0x00210021,0x21210021,0x21210021,0x01210021,
+   0x00210021,0x21210021,0x21210021,0x01210021,0x00010021,0x21010021,0x21010021,0x01010021,
+   0x00002121,0x21002121,0x21002121,0x01002121,0x00212121,0x21212121,0x21212121,0x01212121,
+   0x00212121,0x21212121,0x21212121,0x01212121,0x00012121,0x21012121,0x21012121,0x01012121,
+   0x00002121,0x21002121,0x21002121,0x01002121,0x00212121,0x21212121,0x21212121,0x01212121,
+   0x00212121,0x21212121,0x21212121,0x01212121,0x00012121,0x21012121,0x21012121,0x01012121,
+   0x00000121,0x21000121,0x21000121,0x01000121,0x00210121,0x21210121,0x21210121,0x01210121,
+   0x00210121,0x21210121,0x21210121,0x01210121,0x00010121,0x21010121,0x21010121,0x01010121,
+   0x00000001,0x21000001,0x21000001,0x01000001,0x00210001,0x21210001,0x21210001,0x01210001,
+   0x00210001,0x21210001,0x21210001,0x01210001,0x00010001,0x21010001,0x21010001,0x01010001,
+   0x00002101,0x21002101,0x21002101,0x01002101,0x00212101,0x21212101,0x21212101,0x01212101,
+   0x00212101,0x21212101,0x21212101,0x01212101,0x00012101,0x21012101,0x21012101,0x01012101,
+   0x00002101,0x21002101,0x21002101,0x01002101,0x00212101,0x21212101,0x21212101,0x01212101,
+   0x00212101,0x21212101,0x21212101,0x01212101,0x00012101,0x21012101,0x21012101,0x01012101,
+   0x00000101,0x21000101,0x21000101,0x01000101,0x00210101,0x21210101,0x21210101,0x01210101,
+   0x00210101,0x21210101,0x21210101,0x01210101,0x00010101,0x21010101,0x21010101,0x01010101
 };
 
 uint32_t M3hMap[0x100] = {
@@ -509,6 +512,8 @@ void update_skew(void)
       CRTC.hstart = skew; // position at which horizontal display starts
       CRTC.hend = CRTC.hstart + CRTC.registers[1]; // position at which it ends
    }
+   if(asic.extend_border)
+      CRTC.hstart++;
 }
 
 #ifdef MSB_FIRST
@@ -670,6 +675,7 @@ static INLINE void restart_frame(void)
    CRTC.raster_count = 0; // reset raster line counter
    CRTC.scr_base = 0;
    CRTC.line_count = 0; // reset character line counter
+   CRTC.sl_count = 0; // reset scan line counter
    reload_addr();
 }
 
@@ -678,13 +684,17 @@ static INLINE void match_hsw(void)
    if (CRTC.hsw_count == CRTC.hsw) { // matches horizontal sync width?
       GateArray.sl_count++; // update GA scan line counter
       if (GateArray.sl_count == 52) { // trigger interrupt?
-         z80.int_pending = 1; // queue Z80 interrupt
+         if (CRTC.interrupt_sl == 0) { // ASIC interrupt
+            z80.int_pending = 1; // queue Z80 interrupt
+         }
          GateArray.sl_count = 0; // clear counter
+      } else if (CRTC.sl_count == CRTC.interrupt_sl && CRTC.interrupt_sl != 0) { // ASIC interrupt
+         z80.int_pending = 1;
       }
       if (GateArray.hs_count) { // delaying on VSYNC?
          GateArray.hs_count--;
          if (!GateArray.hs_count) {
-            if (GateArray.sl_count >= 32) { // counter above save margin?
+            if (GateArray.sl_count >= 32 && CRTC.interrupt_sl == 0) { // counter above save margin?
                z80.int_pending = 1; // queue interrupt
             }
             GateArray.sl_count = 0; // clear counter
@@ -705,6 +715,7 @@ static INLINE void match_hsw(void)
          CRTC.flag_inmonhsync = 1; // enter monitor HSYNC
          iMonHSStartPos = 0;
          iMonHSPeakToStart = iMonHSPeakPos;
+         asic_dma_cycle();
       } else if (CRTC.hsw_count == 7) { // reached GA HSYNC output cutoff?
          change_mode();
          end_vdu_hsync();
@@ -827,6 +838,36 @@ void prerender_sync_half(void)
 }
 
 
+static INLINE uint8_t get_sprite_asic(unsigned short offset)
+{
+   const int borderWidth = 64 + (asic.extend_border ? 16 : 0);
+   const int borderHeight = 40 + 8*(30 - CRTC.registers[7]);
+   const int screenWidth = 640 + borderWidth;
+   const int screenHeight = 400 + borderHeight; // FIXME 200¿?
+   int i = 0;
+   int x = 2 * (CPC.scr_pos + offset - CPC.scr_base) / dwXScale - borderWidth;
+   int y = VDU.scrln - borderHeight;
+   if (x >= 0 && x < screenWidth && y >= 0 && y < screenHeight) {
+      for(i = 0; i < ASIC_SPRITES; i++) {
+         int sx = asic.sprites_x[i];
+         int mx = asic.sprites_mag_x[i];
+         if(mx > 0 && x >= sx && x < sx + 16 * mx) {
+            int sy = asic.sprites_y[i];
+            int my = asic.sprites_mag_y[i];
+            if(my > 0 && y >= sy && y < sy + 16 * my) {
+               int px = (x - sx) / mx;
+               int py = (y - sy) / my;
+               uint8_t pcol = asic.sprites[i][px][py];
+               if(pcol != 0) {
+                  return pcol;
+               }
+            }
+         }
+      }
+   }
+   return 0;
+}
+
 
 void prerender_normal(void)
 {
@@ -839,7 +880,142 @@ void prerender_normal(void)
    RendPos += 4;
 }
 
+/* shift_scroll_pixel / byte shift scroll operations
+ * uses PrData as temp buffer
+ *
+ * TODO: need a BIG ENDIAN version
+ *
+ * b(0x01000000, 0x00000001, 0x00010100, shift:0)=[0x00010100]
+ * b(0x01000000, 0x00000001, 0x00010100, shift:1)=[0x01010000]
+ * b(0x01000000, 0x00000001, 0x00010100, shift:2)=[0x01000000]
+ * b(0x01000000, 0x00000001, 0x00010100, shift:3)=[0x00000000]
+ * b(0x01000000, 0x00000001, 0x00010100, shift:4)=[0x00000001]
+ * ...
+ */
+static INLINE uint32_t shift_scroll_pixel(int value, int byteShift){
+   uint8_t* p =  (((uint8_t*) &PrData[value]) - byteShift);
+   return (*((uint32_t*) p));
+}
+/**
+ * added asic functions to PreRender
+ *  Display sprite in prerender instead of render to be independent of screen resolution
+ */
+void prerender_normal_plus(void)
+{
+   unsigned int next_address = CRTC.next_address;
+   if(asic.vscroll) {
+      if (CRTC.raster_count + asic.vscroll <= CRTC.registers[9]) {
+         next_address += asic.vscroll * 0x0800;
+      } else {
+         next_address += 80;
+         next_address -= ((CRTC.registers[9] + 1 - asic.vscroll) * 0x0800);
+      }
+   }
 
+   uint8_t* bVidMem = pbRAM + next_address;
+   // check scroll
+   if(asic.hscroll) {
+      int byteOffset = asic.hscroll / 8;
+      int byteShift = asic.hscroll % 8;
+
+      bVidMem -= byteOffset;
+      // prerender data
+      PrData[0] = *(ModeMap + ((*(bVidMem - 1)) * 2));
+      PrData[1] = *(ModeMap + ((*(bVidMem - 1)) * 2) + 1);
+      PrData[2] = *(ModeMap + ((*bVidMem) * 2));
+      PrData[3] = *(ModeMap + ((*bVidMem) * 2) + 1);
+      PrData[4] = *(ModeMap + ((*(bVidMem + 1)) * 2));
+      PrData[5] = *(ModeMap + ((*(bVidMem + 1)) * 2) + 1);
+      *RendPos = shift_scroll_pixel(2, byteShift);
+      *(RendPos + 1) = shift_scroll_pixel(3, byteShift);
+      *(RendPos + 2) = shift_scroll_pixel(4, byteShift);
+      *(RendPos + 3) = shift_scroll_pixel(5, byteShift);
+   }
+   else {
+      *RendPos = *(ModeMap + ((*bVidMem) * 2));
+      *(RendPos + 1) = *(ModeMap + ((*bVidMem) * 2) + 1);
+      *(RendPos + 2) = *(ModeMap + ((*(bVidMem + 1)) * 2));
+      *(RendPos + 3) = *(ModeMap + ((*(bVidMem + 1)) * 2) + 1);
+   }
+
+   uint16_t i, offset = 0;
+   for(i = 0; i < 4; i++) {
+      uint8_t c1 = get_sprite_asic(offset++);
+      uint8_t c2 = get_sprite_asic(offset++);
+      uint8_t c3 = get_sprite_asic(offset++);
+      uint8_t c4 = get_sprite_asic(offset++);
+      if (c4) {
+         *RendPos = ((*RendPos) & 0x00FFFFFF) | (c4 << 24);
+      }
+      if (c3) {
+         *RendPos = ((*RendPos) & 0xFF00FFFF) | (c3 << 16);
+      }
+      if (c2) {
+         *RendPos = ((*RendPos) & 0xFFFF00FF) | (c2 << 8);
+      }
+      if (c1) {
+         *RendPos = ((*RendPos) & 0xFFFFFF00) | c1;
+      }
+      RendPos++;
+   }
+}
+
+void prerender_normal_half_plus(void)
+{
+   unsigned int next_address = CRTC.next_address;
+   if(asic.vscroll) {
+      if (CRTC.raster_count + asic.vscroll <= CRTC.registers[9]) {
+         next_address += asic.vscroll * 0x0800;
+      } else {
+         next_address += 80;
+         next_address -= ((CRTC.registers[9] + 1 - asic.vscroll) * 0x0800);
+      }
+   }
+
+   uint8_t* bVidMem = pbRAM + next_address;
+   // check scroll
+   if(asic.hscroll) {
+      int byteOffset = (asic.hscroll / 2) / 4;
+      int byteShift = ((asic.hscroll / 2) % 4);
+
+      bVidMem -= byteOffset;
+      PrData[3] = PrData[0] = 0;
+      PrData[1] = *(ModeMap + *(bVidMem - 1) );
+      PrData[4] = PrData[2] = *(ModeMap + *bVidMem );
+      PrData[5] = *(ModeMap + *(bVidMem + 1) );
+      *(RendPos) = shift_scroll_pixel(2, byteShift);
+      *(RendPos) = Swap32(shift_scroll_pixel(2, byteShift));
+      *(RendPos + 1) = shift_scroll_pixel(5, byteShift);
+      *(RendPos + 1) = Swap32(shift_scroll_pixel(5, byteShift));
+   }
+   else {
+      *RendPos = *(ModeMap + (*bVidMem));
+      *RendPos = Swap32(*RendPos);
+      *(RendPos + 1) = *(ModeMap + (*(bVidMem + 1)) );
+      *(RendPos + 1) = Swap32(*(RendPos + 1));
+   }
+
+   uint16_t i, offset = 0;
+   for(i = 0; i < 2; i++) {
+      uint8_t c1 = get_sprite_asic(offset++);
+      uint8_t c2 = get_sprite_asic(offset++);
+      uint8_t c3 = get_sprite_asic(offset++);
+      uint8_t c4 = get_sprite_asic(offset++);
+      if (c4) {
+         *RendPos = ((*RendPos) & 0x00FFFFFF) | (c4 << 24);
+      }
+      if (c3) {
+         *RendPos = ((*RendPos) & 0xFF00FFFF) | (c3 << 16);
+      }
+      if (c2) {
+         *RendPos = ((*RendPos) & 0xFFFF00FF) | (c2 << 8);
+      }
+      if (c1) {
+         *RendPos = ((*RendPos) & 0xFFFFFF00) | c1;
+      }
+      RendPos++;
+   }
+}
 
 void prerender_normal_half(void)
 {
@@ -851,7 +1027,7 @@ void prerender_normal_half(void)
    *(RendPos + 1) = Swap32(*(RendPos + 1));
    RendPos += 2;
 }
- 
+
 void set_prerender(void)
 {
    LastPreRend =flags1.combined;
@@ -873,35 +1049,6 @@ void set_prerender(void)
    }
 }
 
-
-
-void render8bpp(void)
-{
-   uint8_t *pbPos = (uint8_t*)CPC.scr_pos;
-   uint8_t bCount = *RendWid++;
-   while (bCount--)
-      *pbPos++ = GateArray.palette[*RendOut++];
-   CPC.scr_pos = (uint32_t *)pbPos;
-}
-
-
-
-void render8bpp_doubleY(void)
-{
-   uint8_t *pbPos = (uint8_t*)CPC.scr_pos;
-   uint32_t dwLineOffs = CPC.scr_bps << 2;
-   uint8_t bCount = *RendWid++;
-   while (bCount--)
-   {
-      register uint8_t val = GateArray.palette[*RendOut++];
-      *(pbPos + dwLineOffs) = val;
-      *pbPos++ = val;
-   }
-   CPC.scr_pos = (uint32_t *)pbPos;
-}
-
-
-
 void render16bpp(void)
 {
    register uint16_t *pwPos = (uint16_t *)CPC.scr_pos;
@@ -912,12 +1059,10 @@ void render16bpp(void)
    CPC.scr_pos = (uint32_t *)pwPos;
 }
 
-
-
 void render16bpp_doubleY(void)
 {
    register uint16_t *pwPos = (uint16_t *)CPC.scr_pos;
-   register uint32_t dwLineOffs = CPC.scr_bps << 1;
+   register uint16_t dwLineOffs = CPC.scr_bps;
    register uint8_t bCount = *RendWid++;
    while (bCount--) {
       register uint16_t val = GateArray.palette[*RendOut++];
@@ -928,41 +1073,6 @@ void render16bpp_doubleY(void)
 }
 
 
-
-void render24bpp(void)
-{
-   register uint8_t *pbPos = (uint8_t*)CPC.scr_pos;
-   register uint8_t bCount = *RendWid++;
-   while (bCount--) {
-      register uint32_t val = GateArray.palette[*RendOut++];
-      *(uint16_t *)pbPos = (uint16_t)val;
-      *(pbPos + 2) = (uint8_t)(val >> 16);
-      pbPos += 3;
-   }
-   CPC.scr_pos = (uint32_t *)pbPos;
-}
-
-
-
-void render24bpp_doubleY(void)
-{
-   register uint8_t *pbPos = (uint8_t*)CPC.scr_pos;
-   register uint32_t dwLineOffs = CPC.scr_bps << 2;
-   register uint8_t bCount = *RendWid++;
-   while (bCount--) {
-      register uint32_t val = GateArray.palette[*RendOut++];
-      *(uint16_t *)(pbPos + dwLineOffs) = (uint16_t)val;
-      *(uint16_t *)pbPos = (uint16_t)val;
-      val >>= 16;
-      *(pbPos + dwLineOffs + 2) = (uint8_t)val;
-      *(pbPos + 2) = (uint8_t)val;
-      pbPos += 3;
-   }
-   CPC.scr_pos = (uint32_t *)pbPos;
-}
-
-
-
 void render32bpp(void)
 {
    register uint8_t bCount = *RendWid++;
@@ -970,8 +1080,6 @@ void render32bpp(void)
       *CPC.scr_pos++ = GateArray.palette[*RendOut++];
    }
 }
-
-
 
 void render32bpp_doubleY(void)
 {
@@ -1168,7 +1276,11 @@ void crtc_cycle(int repeat_count)
 
       if (CRTC.flag_newscan) { // scanline change requested?
          CRTC.flag_newscan = 0;
-         CRTC.addr = CRTC.next_addr;
+         if (CRTC.split_sl && CRTC.sl_count == CRTC.split_sl) {
+            CRTC.next_addr = CRTC.split_addr;
+         }
+         CRTC.addr = CRTC.next_addr; // FIX split screen
+         CRTC.sl_count++;            // <-- CPC-PLUS only?
 
          if (CRTC.flag_invsync) { // VSYNC active?
             CRTC.vsw_count++; // update counter
@@ -1315,7 +1427,7 @@ void crtc_reset(void)
    RendPos = (uint32_t *)&RendBuff[0];
    RendOut = (uint8_t*)RendStart;
    RendWid = &HorzPix[0];
- 
+
    HorzPos = 0x500;
    HorzChar = 0x04;
    HorzMax = 48;
@@ -1331,6 +1443,12 @@ void crtc_reset(void)
    new_dt.NewHDSPTIMG = 0x03;
    CRTC.CharInstSL = (void(*)(void))NoChar;
    CRTC.CharInstMR = (void(*)(void))NoChar;
+
+   // ASIC vars - split screens and raster interrupt
+   CRTC.split_addr = 0;
+   CRTC.split_sl = 0;
+   CRTC.sl_count = 0;
+   CRTC.interrupt_sl = 0;
 
    MinVSync = MID_VHOLD;
    MaxVSync = MinVSync + MIN_VHOLD_RANGE + (int)ceil((float)((MinVSync - MIN_VHOLD) *

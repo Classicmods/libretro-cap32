@@ -1,7 +1,7 @@
 TARGET_NAME := cap32
 
 DEBUG   = 0
-LOG_PERFORMANCE = 1
+LOG_PERFORMANCE = 0
 HAVE_COMPAT = 0
 HAVE_LIBCO = 0
 
@@ -34,8 +34,7 @@ else ifneq ($(findstring MINGW,$(shell uname -a)),)
 endif
 
 CC_AS ?= $(CC)
-LIBM  :=  -lm
-LIBZ  := -lz
+LIBM  := -lm
 # Unix
 ifneq (,$(findstring unix,$(platform)))
 	TARGET := $(TARGET_NAME)_libretro.so
@@ -46,7 +45,6 @@ else ifneq (,$(findstring linux-portable,$(platform)))
 	TARGET := $(TARGET_NAME)_libretro.so
 	fpic := -fPIC -nostdlib
 	LIBM :=
-	LIBZ :=
 	SHARED := -shared -Wl,-version-script=link.T
 # android arm
 else ifneq (,$(findstring android,$(platform)))
@@ -162,7 +160,7 @@ else ifeq ($(platform), ps3)
 	CC_AS = $(CELL_SDK)/host-win32/ppu/bin/ppu-lv2-gcc.exe
 	CXX = $(CELL_SDK)/host-win32/ppu/bin/ppu-lv2-g++.exe
 	AR = $(CELL_SDK)/host-win32/ppu/bin/ppu-lv2-ar.exe
-	PLATFORM_DEFINES := -D__CELLOS_LV2__
+	PLATFORM_DEFINES := -D__CELLOS_LV2__ -Iutils/zlib
 	STATIC_LINKING = 1
 	HAVE_COMPAT = 1
 	MSB_FIRST = 1
@@ -206,6 +204,28 @@ else ifeq ($(platform), psp1)
 	EXTRA_INCLUDES := -I$(shell psp-config --pspsdk-path)/include
 	MSB_FIRST = 1
 
+# Vita
+else ifeq ($(platform), vita)
+	TARGET := $(TARGET_NAME)_libretro_$(platform).a
+	CC = arm-vita-eabi-gcc$(EXE_EXT)
+	CXX = arm-vita-eabi-g++$(EXE_EXT)
+	AR = arm-vita-eabi-ar$(EXE_EXT)
+	PLATFORM_DEFINES := -DVITA -DNO_UNALIGNED_ACCESS
+	STATIC_LINKING = 1
+
+# CTR (3DS)
+else ifeq ($(platform), ctr)
+	TARGET := $(TARGET_NAME)_libretro_$(platform).a
+	CC = $(DEVKITARM)/bin/arm-none-eabi-gcc$(EXE_EXT)
+	CXX = $(DEVKITARM)/bin/arm-none-eabi-g++$(EXE_EXT)
+	AR = $(DEVKITARM)/bin/arm-none-eabi-ar$(EXE_EXT)
+	PLATFORM_DEFINES := -DARM11 -D_3DS -DNO_UNALIGNED_ACCESS -DM16B
+	PLATFORM_DEFINES += -march=armv6k -mtune=mpcore -mfloat-abi=hard
+	PLATFORM_DEFINES += -Wall -mword-relocations
+	PLATFORM_DEFINES += -fomit-frame-pointer -ffast-math
+	CXXFLAGS += -fno-rtti -fno-exceptions
+	STATIC_LINKING = 1
+
 # Xbox 360
 else ifeq ($(platform), xenon)
 	TARGET := $(TARGET_NAME)_libretro_xenon360.a
@@ -227,18 +247,20 @@ else ifeq ($(platform), ngc)
 	STATIC_LINKING = 1
 	HAVE_COMPAT = 1
 	MSB_FIRST = 1
+
 # Nintendo Wii U
 else ifeq ($(platform), wiiu)
        TARGET := $(TARGET_NAME)_libretro_$(platform).a
        CC = $(DEVKITPPC)/bin/powerpc-eabi-gcc$(EXE_EXT)
        CXX = $(DEVKITPPC)/bin/powerpc-eabi-g++$(EXE_EXT)
        AR = $(DEVKITPPC)/bin/powerpc-eabi-ar$(EXE_EXT)
-       COMMONFLAGS += -DGEKKO -DWIIU -DHW_RVL -mwup -mcpu=750 -meabi -mhard-float -D__POWERPC__ -D__ppc__ -DMSB_FIRST -DWORDS_BIGENDIAN=1
+       COMMONFLAGS += -DGEKKO -DWIIU -DHW_RVL -mwup -mcpu=750 -meabi -mhard-float -D__POWERPC__ -D__ppc__ -DWORDS_BIGENDIAN=1
        COMMONFLAGS += -U__INT32_TYPE__ -U __UINT32_TYPE__ -D__INT32_TYPE__=int
        STATIC_LINKING = 1
        PLATFORM_DEFINES += $(COMMONFLAGS) -Iutils/zlib
        HAVE_COMPAT = 1
        MSB_FIRST = 1
+
 # Nintendo Wii
 else ifeq ($(platform), wii)
 	TARGET := $(TARGET_NAME)_libretro_$(platform).a
@@ -285,9 +307,9 @@ else ifeq ($(platform), wincross64)
 	TARGET := $(TARGET_NAME)_libretro.dll
 	AR = x86_64-w64-mingw32-ar
 	CC = x86_64-w64-mingw32-gcc
-	CXX = x86_64-w64-mingw32-g++ 
+	CXX = x86_64-w64-mingw32-g++
 	SHARED := -shared -Wl,--no-undefined -Wl,--version-script=link.T
-	LDFLAGS += -static-libgcc -static-libstdc++ 
+	LDFLAGS += -static-libgcc -static-libstdc++
 	EXTRA_LDF := -lwinmm -Wl,--export-all-symbols
 # Windows
 else
@@ -328,6 +350,10 @@ ifeq ($(LOG_PERFORMANCE), 1)
 	CXXFLAGS += -DLOG_PERFORMANCE
 endif
 
+GIT_VERSION ?= " $(shell git rev-parse --short HEAD || echo unknown)"
+ifneq ($(GIT_VERSION)," unknown")
+    CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
+endif
 
 DEFINES := -D__LIBRETRO__ $(PLATFORM_DEFINES) -DINLINE="inline"
 DEFINES += -DHAVE_CONFIG_H
@@ -338,7 +364,7 @@ CFLAGS   += -Wall
 CXXFLAGS += $(fpic) $(DEFINES)
 CXXFLAGS += -Wall
 
-LDFLAGS += $(LIBM) $(LIBZ)
+LDFLAGS += $(LIBM)
 
 ROMS =
 SNAPS =

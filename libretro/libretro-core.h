@@ -13,10 +13,14 @@
 #define RETRO_DEVICE_AMSTRAD_KEYBOARD RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_KEYBOARD, 0)
 #define RETRO_DEVICE_AMSTRAD_JOYSTICK RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
 
-extern unsigned amstrad_devices[ 2 ];
+#define PORTS_NUMBER 2
+#define ID_PLAYER1 0
+#define ID_PLAYER2 1
 
-#define TEX_WIDTH 384
-#define TEX_HEIGHT 272
+extern unsigned amstrad_devices[ PORTS_NUMBER ];
+
+#define TEX_MAX_WIDTH 768
+#define TEX_MAX_HEIGHT 544
 
 //LOG
 #if  defined(__ANDROID__) || defined(ANDROID)
@@ -27,23 +31,67 @@ extern unsigned amstrad_devices[ 2 ];
 #define LOGI printf
 #endif
 
-//TYPES
+//SCREEN 16BITS
+//#define M16B
 
-#define UINT16 uint16_t
-#define UINT32 uint32_t
-#define uint32 uint32_t
-#define uint8 uint8_t
+#ifdef M16B
+ #define PIXEL_BYTES 1
+ #define PIXEL_TYPE unsigned short
+ #define PITCH 2
+#else
+ #define PIXEL_BYTES 2
+ #define PIXEL_TYPE unsigned int
+ #define PITCH 4
+#endif
 
-//SCREEN
-extern unsigned int *Retro_Screen;
+extern PIXEL_TYPE *Retro_Screen;
 
-#define PIXEL_BYTES 2
-#define PIXEL_TYPE UINT32
-#define PITCH 4	
+#ifdef M16B
+    #define RGB2COLOR(r, g, b)    ((b>>3) | ((g>>2)<<5) | ((r>>3)<<11))
+    #define RGB2RED(colour)       (((colour>>11)<<3) & 0xFF)
+    #define RGB2GREEN(colour)     (((colour>>5)<<2) & 0xFF)
+    #define RGB2BLUE(colour)      ((colour<<3) & 0xFF)
+#else
+    #define RGB2COLOR(r, g, b)    (b | ((g << 8) | (r << 16)))
+    #define RGB2RED(colour)       ((colour>>16) & 0xFF)
+    #define RGB2GREEN(colour)     ((colour>>8) & 0xFF)
+    #define RGB2BLUE(colour)      (colour & 0xFF)
+#endif
 
-#define WINDOW_WIDTH 384
-#define WINDOW_HEIGHT 272
-#define WINDOW_SIZE (384*272)
+#define WINDOW_MAX_SIZE (768*544)
+
+
+
+// BIT OPERATIONS - MACROS
+#define BIT_SET(var, bit)    var  = 1 << bit
+#define BIT_ADD(var, bit)    var |= 1 << bit
+#define BIT_CLEAR(var, bit)  var &= ~(1 << bit)
+#define BIT_CHECK(var, bit)  ((var >> bit) & 1)
+#define BIT_TOGGLE(var, bit) var ^= 1 << bit
+
+
+// RETROGUI STATUS - BIT WISE
+#define GUI_DISABLED     0
+#define GUI_KEYBOARD     1
+#define GUI_MENU         2
+#define GUI_STATUSBAR    4
+extern int gui_status;
+
+
+// COMPUTER/EMU STATUS - BIT WISE
+#define COMPUTER_OFF     0
+#define COMPUTER_BOOTING 1
+#define COMPUTER_READY   2
+extern int emu_status;
+
+typedef struct {
+   int model;
+   int ram; /*request only! beware: 6128 enforces minimum!*/
+   int lang;
+   uint32_t padcfg[PORTS_NUMBER];
+   bool is_dirty;
+} computer_cfg_t;
+extern computer_cfg_t retro_computer_cfg;
 
 //VKBD
 #define NPLGN 12
@@ -53,7 +101,7 @@ extern unsigned int *Retro_Screen;
 typedef struct {
 	char norml[NLETT];
 	char shift[NLETT];
-	int val;	
+	int val;
 } Mvk;
 
 extern Mvk MVk[NPLGN*NLIGN*2];
@@ -74,11 +122,13 @@ typedef struct{
 } retro_pal;
 
 //VARIABLES
-extern int pauseg; 
-extern int CROP_WIDTH;
-extern int CROP_HEIGHT;
-extern int VIRTUAL_WIDTH;
-extern int retrow ; 
-extern int retroh ;
+extern int pauseg;
+
+void retro_message(const char *text);
+
+//SCREEN FUNCTIONS
+extern int retro_getStyle();
+extern int retro_getGfxBpp();
+extern int retro_getGfxBps();
 
 #endif

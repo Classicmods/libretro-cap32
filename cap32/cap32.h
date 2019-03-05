@@ -27,10 +27,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdbool.h>
-//RETRO HACK 
+//RETRO HACK
 //TODO ENDIANNESS
 //#define DEBUG 1
 //#define DEBUG_CRTC
+//#define DEBUG_CART
+//#define DEBUG_ASIC
 //#define DEBUG_FDC
 //#define DEBUG_GA
 //#define DEBUG_NO_VIDEO
@@ -51,6 +53,10 @@
 #define CPC_SCR_HEIGHT 312 // max height
 #define CPC_VISIBLE_SCR_WIDTH 384 // visible width: 4+40+4 * 8
 #define CPC_VISIBLE_SCR_HEIGHT 270
+
+#define CPC_MONITOR_COLOR 0
+#define CPC_MONITOR_GREEN 1
+#define CPC_MONITOR_WHITE 2
 
 #define ICN_DISK_WIDTH 14
 #define ICN_DISK_HEIGHT 16
@@ -241,6 +247,7 @@ typedef struct {
    unsigned int snd_buffersize;
    unsigned char *snd_bufferptr;
 
+   unsigned int (*video_monitor)(double r, double g, double b);
 
    union
    {
@@ -250,7 +257,7 @@ typedef struct {
          unsigned int high;
          unsigned int low;
       };
-#else     
+#else
       struct
       {
          unsigned int low;
@@ -319,6 +326,12 @@ typedef struct {
    void (*CharInstSL)(void);
    unsigned char reg_select;
    unsigned char registers[18];
+
+   // 6128+ split screen support
+   unsigned int split_addr;
+   unsigned char split_sl;
+   unsigned int sl_count;
+   unsigned char interrupt_sl;
 } t_CRTC;
 
 typedef struct {
@@ -342,6 +355,8 @@ typedef struct {
 typedef struct {
 	unsigned int hs_count;
    unsigned char ROM_config;
+   unsigned char lower_ROM_bank;
+   bool registerPageOn;
    unsigned char RAM_bank;
    unsigned char RAM_config;
    unsigned char upper_ROM;
@@ -349,7 +364,7 @@ typedef struct {
    unsigned int scr_mode;
    unsigned char pen;
    unsigned char ink_values[17];
-   unsigned int palette[19];
+   unsigned int palette[34];
    unsigned char sl_count;
    unsigned char int_delay;
 } t_GateArray;
@@ -371,7 +386,7 @@ typedef struct
          unsigned int high;
          unsigned int low;
       };
-#else     
+#else
       struct
       {
          unsigned int low;
@@ -447,6 +462,9 @@ typedef struct {
    unsigned int dwOffset;
 } t_zip_info;
 
+#define MAX_DISK_FORMAT 8
+#define DEFAULT_DISK_FORMAT 0
+#define FIRST_CUSTOM_DISK_FORMAT 2
 typedef struct {
    unsigned char label[40]; // label to display in options dialog
    unsigned int tracks; // number of tracks
@@ -461,6 +479,10 @@ typedef struct {
 
 // cap32.cpp
 void emulator_reset(bool bolMF2Reset);
+int video_set_palette (void);
+void video_set_palette_antialias (void);
+int emulator_select_ROM (void);
+size_t get_ram_size(void);
 
 // fdc.c
 #ifdef __cplusplus

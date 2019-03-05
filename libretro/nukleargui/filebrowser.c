@@ -30,7 +30,7 @@ static struct file_browser browser;
 #include <unistd.h>
 #endif
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__CELLOS_LV2__)
 # include <pwd.h>
 #endif
 
@@ -159,10 +159,21 @@ file_browser_init(struct file_browser *browser)
     memset(browser, 0, sizeof(*browser));
 
     {
-        /* load files and sub-directory list */
-        const char *home = getenv("HOME");
+//FIXME
+#ifdef __CELLOS_LV2__
+      const char *home = "/dev_hdd0/game/SSNE10000/USRDIR/cores/system/";
+#elif defined(VITA)
+      const char *home = getenv("HOME");
+      if (!home) home = "ux0:/";
+#elif defined(GEKKO)
+      const char *home = "sd:/";
+#elif defined(_3DS)
+      const char *home = "sdmc:/";
+#else
+      /* load files and sub-directory list */
+      const char *home = getenv("HOME");
 #ifdef _WIN32
-        if (!home) home = getenv("USERPROFILE");
+      if (!home) home = getenv("USERPROFILE");
 #else
         if (!home) home = getpwuid(getuid())->pw_dir;
         {
@@ -173,6 +184,7 @@ file_browser_init(struct file_browser *browser)
             strcpy(browser->directory, browser->home);
 
         }
+#endif
 #endif
         {
             size_t l;
@@ -199,7 +211,7 @@ file_browser_free(struct file_browser *browser)
 
 void filebrowser_init()
 {
-   
+
     file_browser_init(&browser);
 }
 
@@ -209,4 +221,3 @@ void filebrowser_free()
     file_browser_free(&browser);
 
 }
-

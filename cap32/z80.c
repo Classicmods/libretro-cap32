@@ -61,6 +61,7 @@
 #include "z80.h"
 #include "cap32.h"
 #include "tape.h"
+#include "asic.h"
 
 extern t_CPC CPC;
 extern t_FDC FDC;
@@ -363,6 +364,10 @@ static INLINE uint8_t read_mem(uint16_t addr)
 
 static INLINE void write_mem(uint16_t addr, uint8_t val)
 {
+   if (GateArray.registerPageOn) {
+      if(!asic_register_page_write(addr, val))
+         return;
+   }
    *(membank_write[addr >> 14] + (addr & 0x3fff)) = val; // writes a byte to a 16KB memory bank
 }
 

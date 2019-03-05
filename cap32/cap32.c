@@ -182,7 +182,9 @@ long GetTicks(void);
 int HandleExtension(char *path,char *ext);
 
 #include "libretro-core.h"
-extern unsigned int bmp[WINDOW_SIZE];//[400 * 300];
+#include "retro_snd.h"
+
+extern unsigned int bmp[WINDOW_MAX_SIZE];
 extern char RPATH[512];
 extern int SND;
 extern int autorun;
@@ -194,47 +196,18 @@ extern void kbd_buf_update();
 
 extern char DISKA_NAME[512];
 extern char DISKB_NAME[512];
-extern char TAPE_NAME[512];
+extern char cart_name[512];
 
 #include "cap32.h"
 #include "crtc.h"
 #include "tape.h"
-
+#include "cart.h"
 #include "z80.h"
+#include "asic.h"
+#include "slots.h"
+#include "errors.h"
 
 #define VERSION_STRING "v4.2.0"
-
-#define ERR_INPUT_INIT           1
-#define ERR_VIDEO_INIT           2
-#define ERR_VIDEO_SET_MODE       3
-#define ERR_VIDEO_SURFACE        4
-#define ERR_VIDEO_PALETTE        5
-#define ERR_VIDEO_COLOUR_DEPTH   6
-#define ERR_AUDIO_INIT           7
-#define ERR_AUDIO_RATE           8
-#define ERR_OUT_OF_MEMORY        9
-#define ERR_CPC_ROM_MISSING      10
-#define ERR_NOT_A_CPC_ROM        11
-#define ERR_ROM_NOT_FOUND        12
-#define ERR_FILE_NOT_FOUND       13
-#define ERR_FILE_BAD_ZIP         14
-#define ERR_FILE_EMPTY_ZIP       15
-#define ERR_FILE_UNZIP_FAILED    16
-#define ERR_SNA_INVALID          17
-#define ERR_SNA_SIZE             18
-#define ERR_SNA_CPC_TYPE         19
-#define ERR_SNA_WRITE            20
-#define ERR_DSK_INVALID          21
-#define ERR_DSK_SIDES            22
-#define ERR_DSK_SECTORS          23
-#define ERR_DSK_WRITE            24
-#define MSG_DSK_ALTERED          25
-#define ERR_TAP_INVALID          26
-#define ERR_TAP_UNSUPPORTED      27
-#define ERR_TAP_BAD_VOC          28
-#define ERR_PRINTER              29
-#define ERR_BAD_MF2_ROM          30
-#define ERR_SDUMP                31
 
 #define MSG_SNA_LOAD             32
 #define MSG_SNA_SAVE             33
@@ -265,7 +238,6 @@ extern uint16_t MaxVSync;
 extern t_flags1 flags1;
 extern t_new_dt new_dt;
 
-
 //video_plugin* vid_plugin;
 uint32_t dwSndMinSafeDist=0, dwSndMaxSafeDist=2*2*882;
 
@@ -282,16 +254,15 @@ uint8_t *pbSndBufferEnd = NULL;
 uint8_t *pbSndStream = NULL;
 uint8_t *membank_read[4], *membank_write[4], *memmap_ROM[256];
 uint8_t *pbRAM = NULL;
+uint8_t *pbROM = NULL;
 uint8_t *pbROMlo = NULL;
 uint8_t *pbROMhi = NULL;
 uint8_t *pbExpansionROM = NULL;
 uint8_t *pbMF2ROMbackup = NULL;
 uint8_t *pbMF2ROM = NULL;
-uint8_t *pbTapeImage = NULL;
-uint8_t *pbTapeImageEnd = NULL;
 uint8_t keyboard_matrix[16];
 
-static uint8_t *membank_config[8][4];
+uint8_t *membank_config[8][4];
 
 FILE *pfileObject;
 FILE *pfoPrinter;
@@ -311,7 +282,7 @@ uint32_t freq_table[MAX_FREQ_ENTRIES] = {
    96000
 };
 
-static double colours_rgb[32][3] = {
+double colours_rgb[32][3] = {
    { 0.5, 0.5, 0.5 }, { 0.5, 0.5, 0.5 },{ 0.0, 1.0, 0.5 }, { 1.0, 1.0, 0.5 },
    { 0.0, 0.0, 0.5 }, { 1.0, 0.0, 0.5 },{ 0.0, 0.5, 0.5 }, { 1.0, 0.5, 0.5 },
    { 1.0, 0.0, 0.5 }, { 1.0, 1.0, 0.5 },{ 1.0, 1.0, 0.0 }, { 1.0, 1.0, 1.0 },
@@ -322,7 +293,9 @@ static double colours_rgb[32][3] = {
    { 0.5, 0.0, 0.0 }, { 0.5, 0.0, 1.0 },{ 0.5, 0.5, 0.0 }, { 0.5, 0.5, 1.0 }
 };
 
-static double colours_green[32] = {
+// original RGB color to GREEN LUMA converted by Ulrich Doewich
+// unknown formula, check video_get_green to see an approximation.
+double colours_green[32] = {
    0.5647, 0.5647, 0.7529, 0.9412,
    0.1882, 0.3765, 0.4706, 0.6588,
    0.3765, 0.9412, 0.9098, 0.9725,
@@ -333,7 +306,7 @@ static double colours_green[32] = {
    0.2510, 0.3137, 0.5333, 0.5961
 };
 
-uint32_t colours[32];
+PIXEL_TYPE colours[32];
 
 static uint8_t bit_values[8] = {
    0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80
@@ -377,231 +350,14 @@ typedef enum {
 
 #include "libretro.h"
 
-//TAKEN FORM ARNOLD
-typedef enum
-{
-	/* line 0, bit 0..bit 7 */
-	CPC_KEY_CURSOR_UP = 0,
-	CPC_KEY_CURSOR_RIGHT,
-	CPC_KEY_CURSOR_DOWN,
-	CPC_KEY_F9,
-	CPC_KEY_F6,
-	CPC_KEY_F3,
-	CPC_KEY_SMALL_ENTER,
-	CPC_KEY_FDOT,
-	/* line 1, bit 0..bit 7 */ //8
-	CPC_KEY_CURSOR_LEFT,
-	CPC_KEY_COPY,
-	CPC_KEY_F7,
-	CPC_KEY_F8,
-	CPC_KEY_F5,
-	CPC_KEY_F1,
-	CPC_KEY_F2,
-	CPC_KEY_F0,
-	/* line 2, bit 0..bit 7 */  //16
-	CPC_KEY_CLR,
-	CPC_KEY_OPEN_SQUARE_BRACKET,
-	CPC_KEY_RETURN,
-	CPC_KEY_CLOSE_SQUARE_BRACKET,
-	CPC_KEY_F4,
-	CPC_KEY_SHIFT,
-	CPC_KEY_FORWARD_SLASH,
-	CPC_KEY_CONTROL,
-	/* line 3, bit 0.. bit 7 */ //24
-	CPC_KEY_HAT,
-	CPC_KEY_MINUS,
-	CPC_KEY_AT,
-	CPC_KEY_P,
-	CPC_KEY_SEMICOLON,
-	CPC_KEY_COLON,
-	CPC_KEY_BACKSLASH,
-	CPC_KEY_DOT,
-	/* line 4, bit 0..bit 7 */ //32
-	CPC_KEY_ZERO,
-	CPC_KEY_9,
-	CPC_KEY_O,
-	CPC_KEY_I,
-	CPC_KEY_L,
-	CPC_KEY_K,
-	CPC_KEY_M,
-	CPC_KEY_COMMA,
-	/* line 5, bit 0..bit 7 */ //40
-	CPC_KEY_8,
-	CPC_KEY_7,
-	CPC_KEY_U,
-	CPC_KEY_Y,
-	CPC_KEY_H,
-	CPC_KEY_J,
-	CPC_KEY_N,
-	CPC_KEY_SPACE,
-	/* line 6, bit 0..bit 7 */ //48
-	CPC_KEY_6,
-	CPC_KEY_5,
-	CPC_KEY_R,
-	CPC_KEY_T,
-	CPC_KEY_G,
-	CPC_KEY_F,
-	CPC_KEY_B,
-	CPC_KEY_V,
-	/* line 7, bit 0.. bit 7 */ //56
-	CPC_KEY_4,
-	CPC_KEY_3,
-	CPC_KEY_E,
-	CPC_KEY_W,
-	CPC_KEY_S,
-	CPC_KEY_D,
-	CPC_KEY_C,
-	CPC_KEY_X,
-	/* line 8, bit 0.. bit 7 */ //64
-	CPC_KEY_1,
-	CPC_KEY_2,
-	CPC_KEY_ESC,
-	CPC_KEY_Q,
-	CPC_KEY_TAB,
-	CPC_KEY_A,
-	CPC_KEY_CAPS_LOCK,
-	CPC_KEY_Z,
-	/* line 9, bit 7..bit 0 */  //72
-	CPC_KEY_JOY_UP,
-	CPC_KEY_JOY_DOWN,
-	CPC_KEY_JOY_LEFT,
-	CPC_KEY_JOY_RIGHT,
-	CPC_KEY_JOY_FIRE1,
-	CPC_KEY_JOY_FIRE2,
-	CPC_KEY_SPARE,
-	CPC_KEY_DEL,
-
-
-	/* no key press */
-	CPC_KEY_NULL
-} CPC_KEY_ID;
-
-void CPC_SetKey(int KeyID)
-{
-	if (KeyID!=CPC_KEY_NULL)
-	{
-		int Line = KeyID>>3;
-		int Bit = KeyID & 0x07;
-		keyboard_matrix/*KeyboardData*/[Line] &= ~(1<<Bit);
-	}
-}
-
-void CPC_ClearKey(int KeyID)
-{
-	if (KeyID!=CPC_KEY_NULL)
-	{
-		int Line = KeyID>>3;
-		int Bit = KeyID & 0x07;
-		keyboard_matrix/*KeyboardData*/[Line] |= (1<<Bit);
-	}
-}
-
-static int KeySymToCPCKey[512];
-
-void	retro_InitialiseKeyboardMapping()
-{
-	int	 i;
-
-	for (i=0; i<512; i++)
-	{
-		KeySymToCPCKey[i] = CPC_KEY_NULL;
-	}
-
-	/* International key mappings */
-	KeySymToCPCKey[RETROK_0] = CPC_KEY_ZERO;
-	KeySymToCPCKey[RETROK_1] = CPC_KEY_1;
-	KeySymToCPCKey[RETROK_2] = CPC_KEY_2;
-	KeySymToCPCKey[RETROK_3] = CPC_KEY_3;
-	KeySymToCPCKey[RETROK_4] = CPC_KEY_4;
-	KeySymToCPCKey[RETROK_5] = CPC_KEY_5;
-	KeySymToCPCKey[RETROK_6] = CPC_KEY_6;
-	KeySymToCPCKey[RETROK_7] = CPC_KEY_7;
-	KeySymToCPCKey[RETROK_8] = CPC_KEY_8;
-	KeySymToCPCKey[RETROK_9] = CPC_KEY_9;
-	KeySymToCPCKey[RETROK_a] = CPC_KEY_A;
-	KeySymToCPCKey[RETROK_b] = CPC_KEY_B;
-	KeySymToCPCKey[RETROK_c] = CPC_KEY_C;
-	KeySymToCPCKey[RETROK_d] = CPC_KEY_D;
-	KeySymToCPCKey[RETROK_e] = CPC_KEY_E;
-	KeySymToCPCKey[RETROK_f] = CPC_KEY_F;
-	KeySymToCPCKey[RETROK_g] = CPC_KEY_G;
-	KeySymToCPCKey[RETROK_h] = CPC_KEY_H;
-	KeySymToCPCKey[RETROK_i] = CPC_KEY_I;
-	KeySymToCPCKey[RETROK_j] = CPC_KEY_J;
-	KeySymToCPCKey[RETROK_k] = CPC_KEY_K;
-	KeySymToCPCKey[RETROK_l] = CPC_KEY_L;
-	KeySymToCPCKey[RETROK_m] = CPC_KEY_M;
-	KeySymToCPCKey[RETROK_n] = CPC_KEY_N;
-	KeySymToCPCKey[RETROK_o] = CPC_KEY_O;
-	KeySymToCPCKey[RETROK_p] = CPC_KEY_P;
-	KeySymToCPCKey[RETROK_q] = CPC_KEY_Q;
-	KeySymToCPCKey[RETROK_r] = CPC_KEY_R;
-	KeySymToCPCKey[RETROK_s] = CPC_KEY_S;
-	KeySymToCPCKey[RETROK_t] = CPC_KEY_T;
-	KeySymToCPCKey[RETROK_u] = CPC_KEY_U;
-	KeySymToCPCKey[RETROK_v] = CPC_KEY_V;
-	KeySymToCPCKey[RETROK_w] = CPC_KEY_W;
-	KeySymToCPCKey[RETROK_x] = CPC_KEY_X;
-	KeySymToCPCKey[RETROK_y] = CPC_KEY_Y;
-	KeySymToCPCKey[RETROK_z] = CPC_KEY_Z;
-	KeySymToCPCKey[RETROK_SPACE] = CPC_KEY_SPACE;
-	KeySymToCPCKey[RETROK_COMMA] = CPC_KEY_COMMA;
-	KeySymToCPCKey[RETROK_PERIOD] = CPC_KEY_DOT;
-	KeySymToCPCKey[RETROK_SEMICOLON] = CPC_KEY_COLON;
-	KeySymToCPCKey[RETROK_MINUS] = CPC_KEY_MINUS;
-	KeySymToCPCKey[RETROK_EQUALS] = CPC_KEY_HAT;
-	KeySymToCPCKey[RETROK_LEFTBRACKET] = CPC_KEY_AT;
-	KeySymToCPCKey[RETROK_RIGHTBRACKET] =CPC_KEY_OPEN_SQUARE_BRACKET;
-
-	KeySymToCPCKey[RETROK_TAB] = CPC_KEY_TAB;
-	KeySymToCPCKey[RETROK_RETURN] = CPC_KEY_RETURN;
-	KeySymToCPCKey[RETROK_BACKSPACE] = CPC_KEY_DEL;
-	KeySymToCPCKey[RETROK_ESCAPE] = CPC_KEY_ESC;
-
-	//KeySymToCPCKey[RETROK_Equals & 0x0ff)] = CPC_KEY_CLR;
-
-	KeySymToCPCKey[RETROK_UP] = CPC_KEY_CURSOR_UP;
-	KeySymToCPCKey[RETROK_DOWN] = CPC_KEY_CURSOR_DOWN;
-	KeySymToCPCKey[RETROK_LEFT] = CPC_KEY_CURSOR_LEFT;
-	KeySymToCPCKey[RETROK_RIGHT] = CPC_KEY_CURSOR_RIGHT;
-
-	KeySymToCPCKey[RETROK_KP0] = CPC_KEY_F0;
-	KeySymToCPCKey[RETROK_KP1] = CPC_KEY_F1;
-	KeySymToCPCKey[RETROK_KP2] = CPC_KEY_F2;
-	KeySymToCPCKey[RETROK_KP3] = CPC_KEY_F3;
-	KeySymToCPCKey[RETROK_KP4] = CPC_KEY_F4;
-	KeySymToCPCKey[RETROK_KP5] = CPC_KEY_F5;
-	KeySymToCPCKey[RETROK_KP6] = CPC_KEY_F6;
-	KeySymToCPCKey[RETROK_KP7] = CPC_KEY_F7;
-	KeySymToCPCKey[RETROK_KP8] = CPC_KEY_F8;
-	KeySymToCPCKey[RETROK_KP9] = CPC_KEY_F9;
-
-	KeySymToCPCKey[RETROK_KP_PERIOD] = CPC_KEY_FDOT;
-
-	KeySymToCPCKey[RETROK_LSHIFT] = CPC_KEY_SHIFT;
-	KeySymToCPCKey[RETROK_RSHIFT] = CPC_KEY_SHIFT;
-	KeySymToCPCKey[RETROK_LCTRL] = CPC_KEY_CONTROL;
-	KeySymToCPCKey[RETROK_RCTRL] = CPC_KEY_CONTROL;
-	KeySymToCPCKey[RETROK_CAPSLOCK] = CPC_KEY_CAPS_LOCK;
-
-	KeySymToCPCKey[RETROK_KP_ENTER] = CPC_KEY_SMALL_ENTER;
-
-	KeySymToCPCKey[RETROK_DELETE] = CPC_KEY_JOY_LEFT;
-	KeySymToCPCKey[RETROK_END] = CPC_KEY_JOY_DOWN;
-	KeySymToCPCKey[RETROK_PAGEDOWN] = CPC_KEY_JOY_RIGHT;
-	KeySymToCPCKey[RETROK_INSERT] = CPC_KEY_JOY_FIRE1;
-	KeySymToCPCKey[RETROK_HOME] = CPC_KEY_JOY_UP;
-	KeySymToCPCKey[RETROK_PAGEUP] = CPC_KEY_JOY_FIRE2;
-
-	KeySymToCPCKey[0x0134] = CPC_KEY_COPY;			/* Alt */
-	KeySymToCPCKey[0x0137] = CPC_KEY_COPY;			/* Compose */
-
-}
-
-
 #define MAX_ROM_MODS 2
-extern /*static*/ char cpc_keytrans[MAX_ROM_MODS][240];
-#include "rom_mods.c"
+#include "rom/rom_mods.h"
+
+#include "rom/464.h"
+#include "rom/6128.h"
+#include "rom/6128p.h"
+#include "rom/amsdos.h"
+
 
 char chAppPath[_MAX_PATH + 1];
 char chROMSelected[_MAX_PATH + 1];
@@ -624,9 +380,6 @@ t_drive driveB;
 
 t_zip_info zip_info;
 
-#define MAX_DISK_FORMAT 8
-#define DEFAULT_DISK_FORMAT 0
-#define FIRST_CUSTOM_DISK_FORMAT 2
 t_disk_format disk_format[MAX_DISK_FORMAT] = {
    { "178K Data Format", 40, 1, 9, 2, 0x52, 0xe5, {{ 0xc1, 0xc6, 0xc2, 0xc7, 0xc3, 0xc8, 0xc4, 0xc9, 0xc5 }} },
    { "169K Vendor Format", 40, 1, 9, 2, 0x52, 0xe5, {{ 0x41, 0x46, 0x42, 0x47, 0x43, 0x48, 0x44, 0x49, 0x45 }} }
@@ -729,11 +482,15 @@ void ga_memory_manager (void)
    }
    if (!(GateArray.ROM_config & 0x04)) { // lower ROM is enabled?
       if (dwMF2Flags & MF2_ACTIVE) { // is the Multiface 2 paged in?
-         membank_read[0] = pbMF2ROM;
-         membank_write[0] = pbMF2ROM;
+         membank_read[GateArray.lower_ROM_bank] = pbMF2ROM;
+         membank_write[GateArray.lower_ROM_bank] = pbMF2ROM;
       } else {
-         membank_read[0] = pbROMlo; // 'page in' lower ROM
+         membank_read[GateArray.lower_ROM_bank] = pbROMlo; // 'page in' lower ROM
       }
+   }
+   if (CPC.model >= 3 && GateArray.registerPageOn) {
+      membank_read[1] = pbRegisterPage;
+      membank_write[1] = pbRegisterPage;
    }
    if (!(GateArray.ROM_config & 0x08)) { // upper/expansion ROM is enabled?
       membank_read[3] = pbExpansionROM; // 'page in' upper/expansion ROM
@@ -787,7 +544,10 @@ uint8_t z80_IN_handler (reg_pair port)
             break;
 
          case 1: // read from port B?
-            if (PPI.control & 2) { // port B set to input?
+            // 6128+: always use port B as input as this fixes Tintin on the moon.
+            // This should always be the case anyway but do not activate it for other model for now, let's validate it before.
+            // TODO: verify with CPC (non-plus) if we go in the else in some cases
+            if (CPC.model > 2 || PPI.control & 2) { // port B set to input?
                ret_val = bTapeLevel | // tape level when reading
                          (CPC.printer ? 0 : 0x40) | // ready line of connected printer
                          (CPC.jumpers & 0x7f) | // manufacturer + 50Hz
@@ -864,20 +624,10 @@ void z80_OUT_handler (reg_pair port, uint8_t val)
             {
                uint8_t colour = val & 0x1f; // isolate colour value
                GateArray.ink_values[GateArray.pen] = colour;
-               GateArray.palette[GateArray.pen] =colours[colour];//SDL_MapRGB(back_surface->format,
-                //colours[colour].r, colours[colour].g, colours[colour].b);
+               GateArray.palette[GateArray.pen] =colours[colour];
+               // mode 2 - 'anti-aliasing' colour
                if (GateArray.pen < 2) {
-
-//FIXME RETRO 
-unsigned char r,g,b,r2,g2,b2;
-r=(colours[GateArray.ink_values[0]]>>16)&0xFF;
-g=(colours[GateArray.ink_values[0]]>>8)&0xFF;
-b=colours[GateArray.ink_values[0]]&0xFF;
-r2=(colours[GateArray.ink_values[1]]>>16)&0xFF;
-g2=(colours[GateArray.ink_values[1]]>>8)&0xFF;
-b2=colours[GateArray.ink_values[1]]&0xFF;
-GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
-
+                  video_set_palette_antialias();
                }
             }
             if (CPC.mf2) { // MF2 enabled?
@@ -886,32 +636,53 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
             }
             break;
          case 2: // set mode
-            #ifdef DEBUG_GA
-            if (dwDebugFlag) {
-               fprintf(pfoDebug, "rom 0x%02x\r\n", val);
-            }
-            #endif
-            GateArray.ROM_config = val;
-            GateArray.requested_scr_mode = val & 0x03; // request a new CPC screen mode
-            ga_memory_manager();
-            if (val & 0x10) { // delay Z80 interrupt?
-               z80.int_pending = 0; // clear pending interrupts
-               GateArray.sl_count = 0; // reset GA scanline counter
-            }
-            if (CPC.mf2) { // MF2 enabled?
-               *(pbMF2ROM + 0x03fef) = val;
+            if (!asic.locked && (val & 0x20) && CPC.model > 2) {
+               // 6128+ RMR2 register
+               int membank = (val >> 3) & 3;
+               if (membank == 3) { // Map register page at 0x4000
+                  //printf("Register page on\n");
+                  GateArray.registerPageOn = true;
+                  membank = 0;
+               } else {
+                  //printf("Register page off\n");
+                  GateArray.registerPageOn = false;
+               }
+               GateArray.lower_ROM_bank = membank;
+               pbROMlo = pbCartridgePages[(val & 0x7)];
+               ga_memory_manager();
+            } else {
+               #ifdef DEBUG_GA
+               if (dwDebugFlag) {
+                  fprintf(pfoDebug, "rom 0x%02x\r\n", val);
+               }
+               #endif
+               GateArray.ROM_config = val;
+               GateArray.requested_scr_mode = val & 0x03; // request a new CPC screen mode
+               ga_memory_manager();
+               if (val & 0x10) { // delay Z80 interrupt?
+                  z80.int_pending = 0; // clear pending interrupts
+                  GateArray.sl_count = 0; // reset GA scanline counter
+               }
+               if (CPC.mf2) { // MF2 enabled?
+                  *(pbMF2ROM + 0x03fef) = val;
+               }
             }
             break;
          case 3: // set memory configuration
-            #ifdef DEBUG_GA
-            if (dwDebugFlag) {
-               fprintf(pfoDebug, "mem 0x%02x\r\n", val);
-            }
-            #endif
-            GateArray.RAM_config = val;
-            ga_memory_manager();
-            if (CPC.mf2) { // MF2 enabled?
-               *(pbMF2ROM + 0x03fff) = val;
+            if (asic.locked) {
+               #ifdef DEBUG_GA
+               if (dwDebugFlag) {
+                  fprintf(pfoDebug, "mem 0x%02x\r\n", val);
+               }
+               #endif
+               GateArray.RAM_config = val;
+               ga_memory_manager();
+               if (CPC.mf2) { // MF2 enabled?
+                  *(pbMF2ROM + 0x03fff) = val;
+               }
+            } else {
+               // 6128+ memory mapping register
+               printf("Memory mapping register (RAM)\n");
             }
             break;
       }
@@ -921,6 +692,8 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
    if (!(port.b.h & 0x40)) { // CRTC chip select?
       uint8_t crtc_port = port.b.h & 3;
       if (crtc_port == 0) { // CRTC register select?
+         // 6128+: this is where we should detect the ASIC (un)locking sequence
+         asic_poke_lock_sequence(val);
          CRTC.reg_select = val;
          if (CPC.mf2) { // MF2 enabled?
             *(pbMF2ROM + 0x03cff) = val;
@@ -998,7 +771,7 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
 
                      // matches maximum raster address?
                      if (CRTC.raster_count == CRTC.registers[9])
-                     { 
+                     {
                         temp = 1;
                         CRTC.flag_resscan = 1; // request a raster counter reset
                      }
@@ -1069,13 +842,28 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
    if (!(port.b.h & 0x20))
    {
       /* ROM select? */
-      GateArray.upper_ROM = val;
-      pbExpansionROM = memmap_ROM[val];
+      if (CPC.model <= 2) {
+         GateArray.upper_ROM = val;
+         pbExpansionROM = memmap_ROM[val];
 
-      /* selected expansion ROM not present? */
-      if (pbExpansionROM == NULL)
-         pbExpansionROM = pbROMhi; /* revert to BASIC ROM */
-
+         /* selected expansion ROM not present? */
+         if (pbExpansionROM == NULL)
+            pbExpansionROM = pbROMhi; /* revert to BASIC ROM */
+      } else {
+         //printf("ROM select: %u\n", (int) val);
+         if (val == 7) {
+            GateArray.upper_ROM = 3;
+            pbExpansionROM = pbCartridgePages[3];
+         } else if (val >= 128) {
+            GateArray.upper_ROM = val & 31;
+            pbExpansionROM = pbCartridgePages[val & 31];
+         } else {
+            GateArray.upper_ROM = 1;
+            pbExpansionROM = pbCartridgePages[1];
+         }
+         //printf("ROM-PAGE select: %u\n", (int) page);
+         //printf("ROM-PAGE val: %u\n", (int) pbExpansionROM[0]);
+      }
       /* upper/expansion ROM is enabled? */
       if (!(GateArray.ROM_config & 0x08))
          membank_read[3] = pbExpansionROM; /* 'page in' upper/expansion ROM */
@@ -1092,7 +880,7 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
       if (pfoPrinter)
       {
          /* only grab data bytes; ignore the strobe signal */
-         if (!(CPC.printer_port & 0x80)) 
+         if (!(CPC.printer_port & 0x80))
             fputc(CPC.printer_port, pfoPrinter); // capture printer output to file
       }
    }
@@ -1166,7 +954,12 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
    }
 
    if ((port.b.h == 0xfa) && (!(port.b.l & 0x80))) { // floppy motor control?
+      //printf("FDC motor control access: %u - %u\n",  (int) port.b.l, (int) val);
       FDC.motor = val & 0x01;
+      if(FDC.motor)
+         retro_snd_cmd(SND_FDCMOTOR, ST_LOOP);
+      else
+         retro_snd_cmd(SND_FDCMOTOR, ST_OFF);
       #ifdef DEBUG_FDC
       fputs(FDC.motor ? "\r\n--- motor on" : "\r\n--- motor off", pfoDebug);
       #endif
@@ -1184,17 +977,6 @@ GateArray.palette[18] = (b+b2)>>1 | ((g+g2)<< 7) | ((r+r2) << 15);
          dwMF2Flags &= ~MF2_ACTIVE;
          ga_memory_manager();
       }
-   }
-}
-
-int file_size (int file_num)
-{
-   struct stat s;
-
-   if (!fstat(file_num, &s)) {
-      return s.st_size;
-   } else {
-      return 0;
    }
 }
 
@@ -1297,7 +1079,11 @@ int zip_extract (char *pchZipFile, char *pchFileName, uint32_t dwOffset)
 
    pfileIn = fopen(pchZipFile, "rb"); // open ZIP file for reading
    fseek(pfileIn, dwOffset, SEEK_SET); // move file pointer to beginning of data block
-   fread(pbGPBuffer, 30, 1, pfileIn); // read local header
+   if(!fread(pbGPBuffer, 30, 1, pfileIn)) { // read local header
+      fclose(pfileIn);
+      fclose(pfileOut);
+      return ERR_FILE_UNZIP_FAILED;
+   }
    dwSize = *(uint32_t *)(pbGPBuffer + 18); // length of compressed data
    dwOffset += 30 + *(uint16_t *)(pbGPBuffer + 26) + *(uint16_t *)(pbGPBuffer + 28);
    fseek(pfileIn, dwOffset, SEEK_SET); // move file pointer to start of compressed data
@@ -1337,1125 +1123,32 @@ int zip_extract (char *pchZipFile, char *pchFileName, uint32_t dwOffset)
    return 0; // data was successfully decompressed
 }
 
-extern int snapshot_load (char *pchFileName);
-
-int snapshot_load (char *pchFileName)
+int emulator_select_ROM (void)
 {
-   int n;
-   uint32_t dwSnapSize, dwModel, dwFlags;
-   char chPath[_MAX_PATH + 1];
-   uint8_t val;
-   reg_pair port;
-   t_SNA_header sh;
-
-   memset(&sh, 0, sizeof(sh));
-   if ((pfileObject = fopen(pchFileName, "rb")) != NULL)
-   {
-      fread(&sh, sizeof(sh), 1, pfileObject); // read snapshot header
-      if (memcmp(sh.id, "MV - SNA", 8) != 0) { // valid SNApshot image?
-         fclose(pfileObject);
-         return ERR_SNA_INVALID;
-      }
-      dwSnapSize = sh.ram_size[0] + (sh.ram_size[1] * 256); // memory dump size
-      dwSnapSize &= ~0x3f; // limit to multiples of 64
-      if (!dwSnapSize) {
-         fclose(pfileObject);
-         return ERR_SNA_SIZE;
-      }
-      if (dwSnapSize > CPC.ram_size) { // memory dump size differs from current RAM size?
-         uint8_t *pbTemp;
-
-         pbTemp = malloc(dwSnapSize*1024 * sizeof(uint8_t));
-         if (pbTemp) {
-            free(pbRAM);
-            CPC.ram_size = dwSnapSize;
-            pbRAM = pbTemp;
-         } else {
-            fclose(pfileObject);
-            return ERR_OUT_OF_MEMORY;
-         }
-      }
-      emulator_reset(false);
-      n = fread(pbRAM, dwSnapSize*1024, 1, pfileObject); // read memory dump into CPC RAM
-      fclose(pfileObject);
-      if (!n) {
-         emulator_reset(false);
-         return ERR_SNA_INVALID;
-      }
-
-      // Z80
-      _A = sh.AF[1];
-      _F = sh.AF[0];
-      _B = sh.BC[1];
-      _C = sh.BC[0];
-      _D = sh.DE[1];
-      _E = sh.DE[0];
-      _H = sh.HL[1];
-      _L = sh.HL[0];
-      _R = sh.R & 0x7f;
-      _Rb7 = sh.R & 0x80; // bit 7 of R
-      _I = sh.I;
-      if (sh.IFF0)
-         _IFF1 = Pflag;
-      if (sh.IFF1)
-         _IFF2 = Pflag;
-      _IXh = sh.IX[1];
-      _IXl = sh.IX[0];
-      _IYh = sh.IY[1];
-      _IYl = sh.IY[0];
-      z80.SP.b.h = sh.SP[1];
-      z80.SP.b.l = sh.SP[0];
-      z80.PC.b.h = sh.PC[1];
-      z80.PC.b.l = sh.PC[0];
-      _IM = sh.IM; // interrupt mode
-      z80.AFx.b.h = sh.AFx[1];
-      z80.AFx.b.l = sh.AFx[0];
-      z80.BCx.b.h = sh.BCx[1];
-      z80.BCx.b.l = sh.BCx[0];
-      z80.DEx.b.h = sh.DEx[1];
-      z80.DEx.b.l = sh.DEx[0];
-      z80.HLx.b.h = sh.HLx[1];
-      z80.HLx.b.l = sh.HLx[0];
-      // Gate Array
-      port.b.h = 0x7f;
-      for (n = 0; n < 17; n++) { // loop for all colours + border
-         GateArray.pen = n;
-         val = sh.ga_ink_values[n]; // GA palette entry
-         z80_OUT_handler(port, val | (1<<6));
-      }
-      val = sh.ga_pen; // GA pen
-      z80_OUT_handler(port, (val & 0x3f));
-      val = sh.ga_ROM_config; // GA ROM configuration
-      z80_OUT_handler(port, (val & 0x3f) | (2<<6));
-      val = sh.ga_RAM_config; // GA RAM configuration
-      z80_OUT_handler(port, (val & 0x3f) | (3<<6));
-      // CRTC
-      port.b.h = 0xbd;
-      for (n = 0; n < 18; n++) { // loop for all CRTC registers
-         val = sh.crtc_registers[n];
-         CRTC.reg_select = n;
-         z80_OUT_handler(port, val);
-      }
-      port.b.h = 0xbc;
-      val = sh.crtc_reg_select; // CRTC register select
-      z80_OUT_handler(port, val);
-      // ROM select
-      port.b.h = 0xdf;
-      val = sh.upper_ROM; // upper ROM number
-      z80_OUT_handler(port, val);
-      // PPI
-      port.b.h = 0xf4; // port A
-      z80_OUT_handler(port, sh.ppi_A);
-      port.b.h = 0xf5; // port B
-      z80_OUT_handler(port, sh.ppi_B);
-      port.b.h = 0xf6; // port C
-      z80_OUT_handler(port, sh.ppi_C);
-      port.b.h = 0xf7; // control
-      z80_OUT_handler(port, sh.ppi_control);
-      // PSG
-      PSG.control = PPI.portC;
-      PSG.reg_select = sh.psg_reg_select;
-      for (n = 0; n < 16; n++) { // loop for all PSG registers
-         SetAYRegister(n, sh.psg_registers[n]);
-      }
-
-      if (sh.version > 1)
-      { // does the snapshot have version 2 data?
-         dwModel = sh.cpc_model; // determine the model it was saved for
-         if (dwModel != CPC.model) { // different from what we're currently running?
-            if (dwModel > 2) { // not one of the known models?
-               emulator_reset(false);
-               return ERR_SNA_CPC_TYPE;
-            }
-            strncpy(chPath, CPC.rom_path, sizeof(chPath)-2);
-            strcat(chPath, "/");
-            strncat(chPath, chROMFile[dwModel], sizeof(chPath)-1 - strlen(chPath)); // path to the required ROM image
-            if ((pfileObject = fopen(chPath, "rb")) != NULL) {
-               n = fread(pbROMlo, 2*16384, 1, pfileObject);
-               fclose(pfileObject);
-               if (!n) {
-                  emulator_reset(false);
-                  return ERR_CPC_ROM_MISSING;
-               }
-               CPC.model = dwModel;
-            } else { // ROM image load failed
-               emulator_reset(false);
-               return ERR_CPC_ROM_MISSING;
-            }
-         }
-      }
-
-      if (sh.version > 2)
-      { // does the snapshot have version 3 data?
-         FDC.motor = sh.fdc_motor;
-         driveA.current_track = sh.drvA_current_track;
-         driveB.current_track = sh.drvB_current_track;
-         CPC.printer_port = sh.printer_data ^ 0x80; // invert bit 7 again
-         PSG.AmplitudeEnv = sh.psg_env_step << 1; // multiply by 2 to bring it into the 0 - 30 range
-         PSG.FirstPeriod = false;
-         if (sh.psg_env_direction == 0x01) { // up
-            switch (PSG.RegisterAY.EnvType)
-            {
-               case 4:
-               case 5:
-               case 6:
-               case 7:
-               case 13:
-               case 14:
-               case 15:
-                  PSG.FirstPeriod = true;
-                  break;
-            }
-         } else if (sh.psg_env_direction == 0xff) { // down
-            switch (PSG.RegisterAY.EnvType)
-            {
-               case 0:
-               case 1:
-               case 2:
-               case 3:
-               case 9:
-               case 10:
-               case 11:
-                  PSG.FirstPeriod = true;
-                  break;
-            }
-         }
-         CRTC.addr = sh.crtc_addr[0] + (sh.crtc_addr[1] * 256);
-         VDU.scanline = sh.crtc_scanline[0] + (sh.crtc_scanline[1] * 256);
-         if (VDU.scanline > MaxVSync) {
-            VDU.scanline = MaxVSync; // limit to max value
-         }
-         CRTC.char_count = sh.crtc_char_count[0];
-         CRTC.line_count = sh.crtc_line_count & 127;
-         CRTC.raster_count = sh.crtc_raster_count & 31;
-         CRTC.hsw_count = sh.crtc_hsw_count & 15;
-         CRTC.vsw_count = sh.crtc_vsw_count & 15;
-         dwFlags = sh.crtc_flags[0] + (sh.crtc_flags[1] * 256);
-         CRTC.flag_invsync = dwFlags & 1 ? 1 : 0; // vsync active?
-         if (dwFlags & 2) { // hsync active?
-            flags1.inHSYNC = 0xff;
-            CRTC.flag_hadhsync = 1;
-            if ((CRTC.hsw_count >= 3) && (CRTC.hsw_count < 7)) {
-               CRTC.flag_inmonhsync = 1;
-            }
-         }
-         CRTC.flag_invta = dwFlags & 0x80 ? 1 : 0; // in vertical total adjust?
-         GateArray.hs_count = sh.ga_int_delay & 3;
-         GateArray.sl_count = sh.ga_sl_count;
-         z80.int_pending = sh.z80_int_pending;
-      }
-   }
-   else
-      return ERR_FILE_NOT_FOUND;
-
-   return 0;
-}
-
-int snapshot_save (char *pchFileName)
-{
-   t_SNA_header sh;
-   int n;
-   uint32_t dwFlags;
-
-   memset(&sh, 0, sizeof(sh));
-
-   strcpy(sh.id, "MV - SNA");
-
-   sh.version = 3;
-
-   /* Z80 */
-   sh.AF[1] = _A;
-   sh.AF[0] = _F;
-   sh.BC[1] = _B;
-   sh.BC[0] = _C;
-   sh.DE[1] = _D;
-   sh.DE[0] = _E;
-   sh.HL[1] = _H;
-   sh.HL[0] = _L;
-   sh.R = (_R & 0x7f) | (_Rb7 & 0x80);
-   sh.I = _I;
-   if (_IFF1)
-      sh.IFF0 = 1;
-   if (_IFF2)
-      sh.IFF1 = 1;
-   sh.IX[1] = _IXh;
-   sh.IX[0] = _IXl;
-   sh.IY[1] = _IYh;
-   sh.IY[0] = _IYl;
-   sh.SP[1] = z80.SP.b.h;
-   sh.SP[0] = z80.SP.b.l;
-   sh.PC[1] = z80.PC.b.h;
-   sh.PC[0] = z80.PC.b.l;
-   sh.IM = _IM;
-   sh.AFx[1] = z80.AFx.b.h;
-   sh.AFx[0] = z80.AFx.b.l;
-   sh.BCx[1] = z80.BCx.b.h;
-   sh.BCx[0] = z80.BCx.b.l;
-   sh.DEx[1] = z80.DEx.b.h;
-   sh.DEx[0] = z80.DEx.b.l;
-   sh.HLx[1] = z80.HLx.b.h;
-   sh.HLx[0] = z80.HLx.b.l;
-   // Gate Array
-   sh.ga_pen = GateArray.pen;
-   for (n = 0; n < 17; n++) { // loop for all colours + border
-      sh.ga_ink_values[n] = GateArray.ink_values[n];
-   }
-   sh.ga_ROM_config = GateArray.ROM_config;
-   sh.ga_RAM_config = GateArray.RAM_config;
-   // CRTC
-   sh.crtc_reg_select = CRTC.reg_select;
-   for (n = 0; n < 18; n++) { // loop for all CRTC registers
-      sh.crtc_registers[n] = CRTC.registers[n];
-   }
-
-   /* ROM select */
-   sh.upper_ROM = GateArray.upper_ROM;
-
-   /* PPI */
-   sh.ppi_A = PPI.portA;
-   sh.ppi_B = PPI.portB;
-   sh.ppi_C = PPI.portC;
-   sh.ppi_control = PPI.control;
-
-   /* PSG */
-   sh.psg_reg_select = PSG.reg_select;
-
-   for (n = 0; n < 16; n++)
-   {
-      /* loop for all PSG registers */
-      sh.psg_registers[n] = PSG.RegisterAY.Index[n];
-   }
-
-   sh.ram_size[0] = CPC.ram_size & 0xff;
-   sh.ram_size[1] = (CPC.ram_size >> 8) & 0xff;
-   /* version 2 info */
-   sh.cpc_model = CPC.model;
-   /* version 3 info */
-   sh.fdc_motor = FDC.motor;
-   sh.drvA_current_track = driveA.current_track;
-   sh.drvB_current_track = driveB.current_track;
-   sh.printer_data = CPC.printer_port ^ 0x80; // invert bit 7 again
-   sh.psg_env_step = PSG.AmplitudeEnv >> 1; // divide by 2 to bring it into the 0 - 15 range
-   if (PSG.FirstPeriod)
-   {
-      switch (PSG.RegisterAY.EnvType)
-      {
-         case 0:
-         case 1:
-         case 2:
-         case 3:
-         case 8:
-         case 9:
-         case 10:
-         case 11:
-            sh.psg_env_direction = 0xff; // down
-            break;
-         case 4:
-         case 5:
-         case 6:
-         case 7:
-         case 12:
-         case 13:
-         case 14:
-         case 15:
-            sh.psg_env_direction = 0x01; // up
-            break;
-      }
-   }
-   else
-   {
-      switch (PSG.RegisterAY.EnvType)
-      {
-         case 0:
-         case 1:
-         case 2:
-         case 3:
-         case 4:
-         case 5:
-         case 6:
-         case 7:
-         case 9:
-         case 11:
-         case 13:
-         case 15:
-            sh.psg_env_direction = 0x00; // hold
-            break;
-         case 8:
-         case 14:
-            sh.psg_env_direction = 0xff; // down
-            break;
-         case 10:
-         case 12:
-            sh.psg_env_direction = 0x01; // up
-            break;
-      }
-   }
-   sh.crtc_addr[0]       = CRTC.addr & 0xff;
-   sh.crtc_addr[1]       = (CRTC.addr >> 8) & 0xff;
-   sh.crtc_scanline[0]   = VDU.scanline & 0xff;
-   sh.crtc_scanline[1]   = (VDU.scanline >> 8) & 0xff;
-   sh.crtc_char_count[0] = CRTC.char_count;
-   sh.crtc_line_count    = CRTC.line_count;
-   sh.crtc_raster_count  = CRTC.raster_count;
-   sh.crtc_hsw_count     = CRTC.hsw_count;
-   sh.crtc_vsw_count     = CRTC.vsw_count;
-   dwFlags               = 0;
-
-   if (CRTC.flag_invsync) // vsync active?
-      dwFlags |= 1;
-   if (flags1.inHSYNC) // hsync active?
-      dwFlags |= 2;
-   if (CRTC.flag_invta) // in vertical total adjust?
-      dwFlags |= 0x80;
-
-   sh.crtc_flags[0] = dwFlags & 0xff;
-   sh.crtc_flags[1] = (dwFlags >> 8) & 0xff;
-   sh.ga_int_delay = GateArray.hs_count;
-   sh.ga_sl_count = GateArray.sl_count;
-   sh.z80_int_pending = z80.int_pending;
-
-   if ((pfileObject = fopen(pchFileName, "wb")) != NULL) {
-      if (fwrite(&sh, sizeof(sh), 1, pfileObject) != 1) { // write snapshot header
-         fclose(pfileObject);
-         return ERR_SNA_WRITE;
-      }
-      if (fwrite(pbRAM, CPC.ram_size*1024, 1, pfileObject) != 1) { // write memory contents to snapshot file
-         fclose(pfileObject);
-         return ERR_SNA_WRITE;
-      }
-      fclose(pfileObject);
-   } else {
-      return ERR_SNA_WRITE;
-   }
-
-
-   return 0;
-}
-
-void dsk_eject (t_drive *drive)
-{
-   uint32_t track, side;
-   uint32_t dwTemp;
-
-   for (track = 0; track < DSK_TRACKMAX; track++)
-   {
-      /* loop for all tracks */
-      for (side = 0; side < DSK_SIDEMAX; side++)
-      {
-         /* loop for all sides */
-         if (drive->track[track][side].data) /* track is formatted? */
-            free(drive->track[track][side].data); // release memory allocated for this track
-      }
-   }
-
-   dwTemp = drive->current_track; // save the drive head position
-   memset(drive, 0, sizeof(t_drive)); // clear drive info structure
-   drive->current_track = dwTemp;
-}
-
-int dsk_load (char *pchFileName, t_drive *drive, char chID)
-{
-   int iRetCode;
-   uint32_t dwTrackSize, track, side, sector, dwSectorSize, dwSectors;
-   uint8_t *pbPtr, *pbDataPtr, *pbTempPtr, *pbTrackSizeTable;
-
-   iRetCode = 0;
-   dsk_eject(drive);
-   if ((pfileObject = fopen(pchFileName, "rb")) != NULL)
-   {
-      fread(pbGPBuffer, 0x100, 1, pfileObject); // read DSK header
-      pbPtr = pbGPBuffer;
-
-      if (memcmp(pbPtr, "MV - CPC", 8) == 0) { // normal DSK image?
-         drive->tracks = *(pbPtr + 0x30); // grab number of tracks
-         if (drive->tracks > DSK_TRACKMAX) { // compare against upper limit
-            drive->tracks = DSK_TRACKMAX; // limit to maximum
-         }
-         drive->sides = *(pbPtr + 0x31); // grab number of sides
-         if (drive->sides > DSK_SIDEMAX) { // abort if more than maximum
-            iRetCode = ERR_DSK_SIDES;
-            goto exit;
-         }
-         dwTrackSize = (*(pbPtr + 0x32) + (*(pbPtr + 0x33) << 8)) - 0x100; // determine track size in bytes, minus track header
-         drive->sides--; // zero base number of sides
-         for (track = 0; track < drive->tracks; track++) { // loop for all tracks
-            for (side = 0; side <= drive->sides; side++) { // loop for all sides
-               fread(pbGPBuffer+0x100, 0x100, 1, pfileObject); // read track header
-               pbPtr = pbGPBuffer + 0x100;
-               if (memcmp(pbPtr, "Track-Info", 10) != 0) { // abort if ID does not match
-                  iRetCode = ERR_DSK_INVALID;
-                  goto exit;
-               }
-               dwSectorSize = 0x80 << *(pbPtr + 0x14); // determine sector size in bytes
-               dwSectors = *(pbPtr + 0x15); // grab number of sectors
-               if (dwSectors > DSK_SECTORMAX) { // abort if sector count greater than maximum
-                  iRetCode = ERR_DSK_SECTORS;
-                  goto exit;
-               }
-               drive->track[track][side].sectors = dwSectors; // store sector count
-               drive->track[track][side].size = dwTrackSize; // store track size
-               drive->track[track][side].data = (uint8_t *)malloc(dwTrackSize); // attempt to allocate the required memory
-               if (drive->track[track][side].data == NULL) { // abort if not enough
-                  iRetCode = ERR_OUT_OF_MEMORY;
-                  goto exit;
-               }
-               pbDataPtr = drive->track[track][side].data; // pointer to start of memory buffer
-               pbTempPtr = pbDataPtr; // keep a pointer to the beginning of the buffer for the current track
-               for (sector = 0; sector < dwSectors; sector++) { // loop for all sectors
-                  memcpy(drive->track[track][side].sector[sector].CHRN, (pbPtr + 0x18), 4); // copy CHRN
-                  memcpy(drive->track[track][side].sector[sector].flags, (pbPtr + 0x1c), 2); // copy ST1 & ST2
-                  drive->track[track][side].sector[sector].size = dwSectorSize;
-                  drive->track[track][side].sector[sector].data = pbDataPtr; // store pointer to sector data
-                  pbDataPtr += dwSectorSize;
-                  pbPtr += 8;
-               }
-               if (!fread(pbTempPtr, dwTrackSize, 1, pfileObject)) { // read entire track data in one go
-                  iRetCode = ERR_DSK_INVALID;
-                  goto exit;
-               }
-            }
-         }
-         drive->altered = 0; // disk is as yet unmodified
-      } else {
-         if (memcmp(pbPtr, "EXTENDED", 8) == 0) { // extended DSK image?
-            drive->tracks = *(pbPtr + 0x30); // number of tracks
-            if (drive->tracks > DSK_TRACKMAX) {  // limit to maximum possible
-               drive->tracks = DSK_TRACKMAX;
-            }
-            drive->random_DEs = *(pbPtr + 0x31) & 0x80; // simulate random Data Errors?
-            drive->sides = *(pbPtr + 0x31) & 3; // number of sides
-            if (drive->sides > DSK_SIDEMAX) { // abort if more than maximum
-               iRetCode = ERR_DSK_SIDES;
-               goto exit;
-            }
-            pbTrackSizeTable = pbPtr + 0x34; // pointer to track size table in DSK header
-            drive->sides--; // zero base number of sides
-            for (track = 0; track < drive->tracks; track++) { // loop for all tracks
-               for (side = 0; side <= drive->sides; side++) { // loop for all sides
-                  dwTrackSize = (*pbTrackSizeTable++ << 8); // track size in bytes
-                  if (dwTrackSize != 0) { // only process if track contains data
-                     dwTrackSize -= 0x100; // compensate for track header
-                     fread(pbGPBuffer+0x100, 0x100, 1, pfileObject); // read track header
-                     pbPtr = pbGPBuffer + 0x100;
-                     if (memcmp(pbPtr, "Track-Info", 10) != 0) { // valid track header?
-                        iRetCode = ERR_DSK_INVALID;
-                        goto exit;
-                     }
-                     dwSectors = *(pbPtr + 0x15); // number of sectors for this track
-                     if (dwSectors > DSK_SECTORMAX) { // abort if sector count greater than maximum
-                        iRetCode = ERR_DSK_SECTORS;
-                        goto exit;
-                     }
-                     drive->track[track][side].sectors = dwSectors; // store sector count
-                     drive->track[track][side].size = dwTrackSize; // store track size
-                     drive->track[track][side].data = (uint8_t *)malloc(dwTrackSize); // attempt to allocate the required memory
-                     if (drive->track[track][side].data == NULL) { // abort if not enough
-                        iRetCode = ERR_OUT_OF_MEMORY;
-                        goto exit;
-                     }
-                     pbDataPtr = drive->track[track][side].data; // pointer to start of memory buffer
-                     pbTempPtr = pbDataPtr; // keep a pointer to the beginning of the buffer for the current track
-                     for (sector = 0; sector < dwSectors; sector++) { // loop for all sectors
-                        memcpy(drive->track[track][side].sector[sector].CHRN, (pbPtr + 0x18), 4); // copy CHRN
-                        memcpy(drive->track[track][side].sector[sector].flags, (pbPtr + 0x1c), 2); // copy ST1 & ST2
-                        dwSectorSize = *(pbPtr + 0x1e) + (*(pbPtr + 0x1f) << 8); // sector size in bytes
-                        drive->track[track][side].sector[sector].size = dwSectorSize;
-                        drive->track[track][side].sector[sector].data = pbDataPtr; // store pointer to sector data
-                        pbDataPtr += dwSectorSize;
-                        pbPtr += 8;
-                     }
-                     if (!fread(pbTempPtr, dwTrackSize, 1, pfileObject)) { // read entire track data in one go
-                        iRetCode = ERR_DSK_INVALID;
-                        goto exit;
-                     }
-                  } else {
-                     memset(&drive->track[track][side], 0, sizeof(t_track)); // track not formatted
-                  }
-               }
-            }
-            drive->altered = 0; // disk is as yet unmodified
-         } else {
-            iRetCode = ERR_DSK_INVALID; // file could not be identified as a valid DSK
-         }
-      }
-
-exit:
-      fclose(pfileObject);
-   }
-   else
-      iRetCode = ERR_FILE_NOT_FOUND;
-
-   if (iRetCode != 0) // on error, 'eject' disk from drive
-      dsk_eject(drive);
-		
-   return iRetCode;
-}
-
-int dsk_save (char *pchFileName, t_drive *drive, char chID)
-{
-   t_DSK_header dh;
-   t_track_header th;
-   uint32_t track, side, pos, sector;
-
-   if ((pfileObject = fopen(pchFileName, "wb")) != NULL) {
-      memset(&dh, 0, sizeof(dh));
-      strcpy(dh.id, "EXTENDED CPC DSK File\r\nDisk-Info\r\n");
-      strcpy(dh.unused1, "Caprice32\r\n");
-      dh.tracks = drive->tracks;
-      dh.sides = (drive->sides+1) | (drive->random_DEs); // correct side count and indicate random DEs, if necessary
-      pos = 0;
-
-      for (track = 0; track < drive->tracks; track++)
-      { // loop for all tracks
-         for (side = 0; side <= drive->sides; side++)
-         { // loop for all sides
-            if (drive->track[track][side].size) // track is formatted?
-               dh.track_size[pos] = (drive->track[track][side].size + 0x100) >> 8; // track size + header in bytes
-            pos++;
-         }
-      }
-
-      if (!fwrite(&dh, sizeof(dh), 1, pfileObject))
-      { // write header to file
-         fclose(pfileObject);
-         return ERR_DSK_WRITE;
-      }
-
-      memset(&th, 0, sizeof(th));
-      strcpy(th.id, "Track-Info\r\n");
-      for (track = 0; track < drive->tracks; track++) { // loop for all tracks
-         for (side = 0; side <= drive->sides; side++) { // loop for all sides
-            if (drive->track[track][side].size) { // track is formatted?
-               th.track = track;
-               th.side = side;
-               th.bps = 2;
-               th.sectors = drive->track[track][side].sectors;
-               th.gap3 = 0x4e;
-               th.filler = 0xe5;
-               for (sector = 0; sector < th.sectors; sector++) {
-                  memcpy(&th.sector[sector][0], drive->track[track][side].sector[sector].CHRN, 4); // copy CHRN
-                  memcpy(&th.sector[sector][4], drive->track[track][side].sector[sector].flags, 2); // copy ST1 & ST2
-                  th.sector[sector][6] = drive->track[track][side].sector[sector].size & 0xff;
-                  th.sector[sector][7] = (drive->track[track][side].sector[sector].size >> 8) & 0xff; // sector size in bytes
-               }
-
-               if (!fwrite(&th, sizeof(th), 1, pfileObject)) { // write track header
-                  fclose(pfileObject);
-                  return ERR_DSK_WRITE;
-               }
-               if (!fwrite(drive->track[track][side].data, drive->track[track][side].size, 1, pfileObject)) { // write track data
-                  fclose(pfileObject);
-                  return ERR_DSK_WRITE;
-               }
-            }
-         }
-      }
-      fclose(pfileObject);
-   }
-   else
-      return ERR_DSK_WRITE; // write attempt failed
-
-   return 0;
-}
-
-int dsk_format (t_drive *drive, int iFormat)
-{
-   uint32_t track, side;
-   int iRetCode = 0;
-
-   drive->tracks = disk_format[iFormat].tracks;
-   if (drive->tracks > DSK_TRACKMAX) { // compare against upper limit
-      drive->tracks = DSK_TRACKMAX; // limit to maximum
-   }
-   drive->sides = disk_format[iFormat].sides;
-   if (drive->sides > DSK_SIDEMAX) { // abort if more than maximum
-      iRetCode = ERR_DSK_SIDES;
-      goto exit;
-   }
-   drive->sides--; // zero base number of sides
-   for (track = 0; track < drive->tracks; track++)
-   {
-      /* loop for all tracks */
-      
-      for (side = 0; side <= drive->sides; side++)
-      {
-         /* loop for all sides */
-         uint32_t dwTrackSize;
-         uint32_t sector;
-         uint32_t dwSectorSize = 0x80 << disk_format[iFormat].sector_size; // determine sector size in bytes
-         uint32_t dwSectors = disk_format[iFormat].sectors;
-
-         if (dwSectors > DSK_SECTORMAX)
-         { // abort if sector count greater than maximum
-            iRetCode = ERR_DSK_SECTORS;
-            goto exit;
-         }
-
-         dwTrackSize = dwSectorSize * dwSectors; // determine track size in bytes, minus track header
-         drive->track[track][side].sectors = dwSectors; /* store sector count */
-         drive->track[track][side].size    = dwTrackSize; /* store track size */
-         drive->track[track][side].data    = (uint8_t *)malloc(dwTrackSize); /* attempt to allocate the required memory */
-         if (drive->track[track][side].data == NULL)
-         {
-            /* abort if not enough */
-            iRetCode = ERR_OUT_OF_MEMORY;
-            goto exit;
-         }
-
-         uint8_t *pbDataPtr = drive->track[track][side].data; // pointer to start of memory buffer
-         uint8_t *pbTempPtr = pbDataPtr; // keep a pointer to the beginning of the buffer for the current track
-         uint8_t CHRN[4];
-         CHRN[0] = (uint8_t)track;
-         CHRN[1] = (uint8_t)side;
-         CHRN[3] = (uint8_t)disk_format[iFormat].sector_size;
-
-         for (sector = 0; sector < dwSectors; sector++)
-         {
-            // loop for all sectors
-            CHRN[2] = disk_format[iFormat].sector_ids[side][sector];
-            memcpy(drive->track[track][side].sector[sector].CHRN, CHRN, 4); // copy CHRN
-            drive->track[track][side].sector[sector].size = dwSectorSize;
-            drive->track[track][side].sector[sector].data = pbDataPtr; // store pointer to sector data
-            pbDataPtr += dwSectorSize;
-         }
-         memset(pbTempPtr, disk_format[iFormat].filler_byte, dwTrackSize);
-      }
-   }
-   drive->altered = 1; // flag disk as having been modified
-
-exit:
-   if (iRetCode != 0) // on error, 'eject' disk from drive
-      dsk_eject(drive);
-   return iRetCode;
-}
-
-void tape_eject (void)
-{
-   free(pbTapeImage);
-   pbTapeImage = NULL;
-}
-
-int tape_insert (char *pchFileName)
-{
-   long lFileSize;
-   int iBlockLength;
-   uint8_t bID;
-   uint8_t *pbPtr, *pbBlock;
-
-   tape_eject();
-
-   if ((pfileObject = fopen(pchFileName, "rb")) == NULL)
-      return ERR_FILE_NOT_FOUND;
-
-   fread(pbGPBuffer, 10, 1, pfileObject); // read CDT header
-   pbPtr = pbGPBuffer;
-
-   if (memcmp(pbPtr, "ZXTape!\032", 8) != 0)
-   {
-      /* valid CDT file? */
-      fclose(pfileObject);
-      return ERR_TAP_INVALID;
-   }
-
-   if (*(pbPtr + 0x08) != 1)
-   {
-      /* major version must be 1 */
-      fclose(pfileObject);
-      return ERR_TAP_INVALID;
-   }
-
-   lFileSize = file_size(fileno(pfileObject)) - 0x0a;
-
-   if (lFileSize <= 0)
-   { // the tape image should have at least one block...
-      fclose(pfileObject);
-      return ERR_TAP_INVALID;
-   }
-   pbTapeImage = (uint8_t *)malloc(lFileSize+6);
-   *pbTapeImage = 0x20; // start off with a pause block
-   *(uint16_t *)(pbTapeImage+1) = 2000; // set the length to 2 seconds
-   fread(pbTapeImage+3, lFileSize, 1, pfileObject); // append the entire CDT file
-   fclose(pfileObject);
-   *(pbTapeImage+lFileSize+3) = 0x20; // end with a pause block
-   *(uint16_t *)(pbTapeImage+lFileSize+3+1) = 2000; // set the length to 2 seconds
-
-   #ifdef DEBUG_TAPE
-   fputs("--- New Tape\r\n", pfoDebug);
-   #endif
-   pbTapeImageEnd = pbTapeImage + lFileSize+6;
-   pbBlock = pbTapeImage;
-   bool bolGotDataBlock = false;
-   while (pbBlock < pbTapeImageEnd)
-   {
-      bID = *pbBlock++;
-      switch(bID)
-      {
-         case 0x10: // standard speed data block
-            iBlockLength = *(uint16_t *)(pbBlock+2) + 4;
-            bolGotDataBlock = true;
-            break;
-         case 0x11: // turbo loading data block
-            iBlockLength = (*(uint32_t *)(pbBlock+0x0f) & 0x00ffffff) + 0x12;
-            bolGotDataBlock = true;
-            break;
-         case 0x12: // pure tone
-            iBlockLength = 4;
-            bolGotDataBlock = true;
-            break;
-         case 0x13: // sequence of pulses of different length
-            iBlockLength = *pbBlock * 2 + 1;
-            bolGotDataBlock = true;
-            break;
-         case 0x14: // pure data block
-            iBlockLength = (*(uint32_t *)(pbBlock+0x07) & 0x00ffffff) + 0x0a;
-            bolGotDataBlock = true;
-            break;
-         case 0x15: // direct recording
-            iBlockLength = (*(uint32_t *)(pbBlock+0x05) & 0x00ffffff) + 0x08;
-            bolGotDataBlock = true;
-            break;
-         case 0x20: // pause
-            if ((!bolGotDataBlock) && (pbBlock != pbTapeImage+1)) {
-               *(uint16_t *)pbBlock = 0; // remove any pauses (execept ours) before the data starts
-            }
-            iBlockLength = 2;
-            break;
-         case 0x21: // group start
-            iBlockLength = *pbBlock + 1;
-            break;
-         case 0x22: // group end
-            iBlockLength = 0;
-            break;
-         case 0x23: // jump to block
-            return ERR_TAP_UNSUPPORTED;
-            iBlockLength = 2;
-            break;
-         case 0x24: // loop start
-            return ERR_TAP_UNSUPPORTED;
-            iBlockLength = 2;
-            break;
-         case 0x25: // loop end
-            return ERR_TAP_UNSUPPORTED;
-            iBlockLength = 0;
-            break;
-         case 0x26: // call sequence
-            return ERR_TAP_UNSUPPORTED;
-            iBlockLength = (*(uint16_t *)pbBlock * 2) + 2;
-            break;
-         case 0x27: // return from sequence
-            return ERR_TAP_UNSUPPORTED;
-            iBlockLength = 0;
-            break;
-         case 0x28: // select block
-            return ERR_TAP_UNSUPPORTED;
-            iBlockLength = *(uint16_t *)pbBlock + 2;
-            break;
-         case 0x30: // text description
-            iBlockLength = *pbBlock + 1;
-            break;
-         case 0x31: // message block
-            iBlockLength = *(pbBlock+1) + 2;
-            break;
-         case 0x32: // archive info
-            iBlockLength = *(uint16_t *)pbBlock + 2;
-            break;
-         case 0x33: // hardware type
-            iBlockLength = (*pbBlock * 3) + 1;
-            break;
-         case 0x34: // emulation info
-            iBlockLength = 8;
-            break;
-         case 0x35: // custom info block
-            iBlockLength = *(uint32_t *)(pbBlock+0x10) + 0x14;
-            break;
-         case 0x40: // snapshot block
-            iBlockLength = (*(uint32_t *)(pbBlock+0x01) & 0x00ffffff) + 0x04;
-            break;
-         case 0x5A: // another tzx/cdt file
-            iBlockLength = 9;
-            break;
-
-         default: // "extension rule"
-            iBlockLength = *(uint32_t *)pbBlock + 4;
-      }
-
-#ifdef DEBUG_TAPE
-      fprintf(pfoDebug, "%02x %d\r\n", bID, iBlockLength);
-#endif
-
-      pbBlock += iBlockLength;
-   }
-
-   if (pbBlock != pbTapeImageEnd)
-   {
-      tape_eject();
-      return ERR_TAP_INVALID;
-   }
-
-   Tape_Rewind();
-
-   sprintf(TAPE_NAME,"%s",pchFileName);
-
-   return 0;
-}
-
-int tape_insert_voc (char *pchFileName)
-{
-   long lFileSize, lOffset, lInitialOffset, lSampleLength;
-   int iBlockLength;
-   uint8_t *pbPtr, *pbTapeImagePtr, *pbVocDataBlock, *pbVocDataBlockPtr;
-   bool bolDone;
-
-   tape_eject();
-
-   if ((pfileObject = fopen(pchFileName, "rb")) == NULL)
-      return ERR_FILE_NOT_FOUND;
-
-   fread(pbGPBuffer, 26, 1, pfileObject); // read VOC header
-   pbPtr = pbGPBuffer;
-
-   if (memcmp(pbPtr, "Creative Voice File\032", 20) != 0)
-   {
-      // valid VOC file?
-      fclose(pfileObject);
-      return ERR_TAP_BAD_VOC;
-   }
-   lOffset =
-   lInitialOffset = *(uint16_t *)(pbPtr + 0x14);
-   lFileSize = file_size(fileno(pfileObject));
-
-   if ((lFileSize-26) <= 0)
-   { // should have at least one block...
-      fclose(pfileObject);
-      return ERR_TAP_BAD_VOC;
-   }
-
-   #ifdef DEBUG_TAPE
-   fputs("--- New Tape\r\n", pfoDebug);
-   #endif
-   iBlockLength = 0;
-   lSampleLength = 0;
-   uint8_t bSampleRate = 0;
-   bolDone = false;
-   while ((!bolDone) && (lOffset < lFileSize))
-   {
-      fseek(pfileObject, lOffset, SEEK_SET);
-      fread(pbPtr, 16, 1, pfileObject); // read block ID + size
-#ifdef DEBUG_TAPE
-      fprintf(pfoDebug, "%02x %d\r\n", *pbPtr, *(uint32_t *)(pbPtr+0x01) & 0x00ffffff);
-#endif
-
-      switch(*pbPtr)
-      {
-         case 0x0: // terminator
-            bolDone = true;
-            break;
-         case 0x1: // sound data
-            iBlockLength = (*(uint32_t *)(pbPtr+0x01) & 0x00ffffff) + 4;
-            lSampleLength += iBlockLength - 6;
-
-            if ((bSampleRate) && (bSampleRate != *(pbPtr+0x04)))
-            { // no change in sample rate allowed
-               fclose(pfileObject);
-               return ERR_TAP_BAD_VOC;
-            }
-
-            bSampleRate = *(pbPtr+0x04);
-
-            if (*(pbPtr+0x05) != 0)
-            { // must be 8 bits wide
-               fclose(pfileObject);
-               return ERR_TAP_BAD_VOC;
-            }
-            break;
-         case 0x2: // sound continue
-            iBlockLength = (*(uint32_t *)(pbPtr+0x01) & 0x00ffffff) + 4;
-            lSampleLength += iBlockLength - 4;
-            break;
-         case 0x3: // silence
-            iBlockLength = 4;
-            lSampleLength += *(uint16_t *)(pbPtr+0x01) + 1;
-            if ((bSampleRate) && (bSampleRate != *(pbPtr+0x03))) { // no change in sample rate allowed
-               fclose(pfileObject);
-               return ERR_TAP_BAD_VOC;
-            }
-            bSampleRate = *(pbPtr+0x03);
-            break;
-         case 0x4: // marker
-            iBlockLength = 3;
-            break;
-         case 0x5: // ascii
-            iBlockLength = (*(uint32_t *)(pbPtr+0x01) & 0x00ffffff) + 4;
-            break;
-         default:
-            fclose(pfileObject);
-            return ERR_TAP_BAD_VOC;
-      }
-      lOffset += iBlockLength;
-   }
-   #ifdef DEBUG_TAPE
-   fprintf(pfoDebug, "--- %ld bytes\r\n", lSampleLength);
-   #endif
-
-   uint32_t dwTapePulseCycles = 3500000L / (1000000L / (256 - bSampleRate)); // length of one pulse in ZX Spectrum T states
-   uint32_t dwCompressedSize = lSampleLength >> 3; // 8x data reduction
-   if (dwCompressedSize > 0x00ffffff)
-   {
-      /* we only support one direct recording block right now */
-      fclose(pfileObject);
-      return ERR_TAP_BAD_VOC;
-   }
-
-   pbTapeImage = (uint8_t *)malloc(dwCompressedSize+1+8+6);
-
-   if (pbTapeImage == NULL)
-   {
-      /* check if the memory allocation has failed */
-      fclose(pfileObject);
-      return ERR_OUT_OF_MEMORY;
-   }
-   *pbTapeImage = 0x20; // start off with a pause block
-   *(uint16_t *)(pbTapeImage+1) = 2000; // set the length to 2 seconds
-
-   *(pbTapeImage+3)             = 0x15; // direct recording block
-   *(uint16_t *)(pbTapeImage+4) = (uint16_t)dwTapePulseCycles; // number of T states per sample
-   *(uint16_t *)(pbTapeImage+6) = 0; // pause after block
-   *(pbTapeImage+8)             = lSampleLength & 7 ? lSampleLength & 7 : 8; // bits used in last byte
-   *(uint32_t *)(pbTapeImage+9) = dwCompressedSize & 0x00ffffff; // data length
-   pbTapeImagePtr               = pbTapeImage + 12;
-
-   lOffset = lInitialOffset;
-   bolDone = false;
-   uint32_t dwBit = 8;
-   uint8_t bByte = 0;
-   unsigned iBytePos;
-   while ((!bolDone) && (lOffset < lFileSize))
-   {
-      fseek(pfileObject, lOffset, SEEK_SET);
-      fread(pbPtr, 1, 1, pfileObject); // read block ID
-
-      switch(*pbPtr)
-      {
-         case 0x0: // terminator
-            bolDone = true;
-            break;
-         case 0x1: // sound data
-            fread(pbPtr, 3+2, 1, pfileObject); // get block size and sound info
-            iBlockLength   = (*(uint32_t *)(pbPtr) & 0x00ffffff) + 4;
-            lSampleLength  = iBlockLength - 6;
-            pbVocDataBlock = (uint8_t *)malloc(lSampleLength);
-
-            if (pbVocDataBlock == NULL)
-            {
-               fclose(pfileObject);
-               tape_eject();
-               return ERR_OUT_OF_MEMORY;
-            }
-
-            fread(pbVocDataBlock, lSampleLength, 1, pfileObject);
-            pbVocDataBlockPtr = pbVocDataBlock;
-
-            for (iBytePos = 0; iBytePos < lSampleLength; iBytePos++)
-            {
-               uint8_t bVocSample = *pbVocDataBlockPtr++;
-
-               dwBit--;
-               
-               if (bVocSample > VOC_THRESHOLD)
-                  bByte |= bit_values[dwBit];
-
-               if (!dwBit)
-               {
-                  /* got all 8 bits? */
-                  *pbTapeImagePtr++ = bByte;
-                  dwBit = 8;
-                  bByte = 0;
-               }
-            }
-            free(pbVocDataBlock);
-            break;
-         case 0x2: // sound continue
-            fread(pbPtr, 3, 1, pfileObject); // get block size
-            iBlockLength = (*(uint32_t *)(pbPtr) & 0x00ffffff) + 4;
-            lSampleLength = iBlockLength - 4;
-            pbVocDataBlock = (uint8_t *)malloc(lSampleLength);
-            if (pbVocDataBlock == NULL)
-            {
-               fclose(pfileObject);
-               tape_eject();
-               return ERR_OUT_OF_MEMORY;
-            }
-            fread(pbVocDataBlock, lSampleLength, 1, pfileObject);
-            pbVocDataBlockPtr = pbVocDataBlock;
-            for (iBytePos = 0; iBytePos < lSampleLength; iBytePos++)
-            {
-               uint8_t bVocSample = *pbVocDataBlockPtr++;
-               dwBit--;
-               if (bVocSample > VOC_THRESHOLD)
-                  bByte |= bit_values[dwBit];
-               if (!dwBit)
-               { // got all 8 bits?
-                  *pbTapeImagePtr++ = bByte;
-                  dwBit = 8;
-                  bByte = 0;
-               }
-            }
-            free(pbVocDataBlock);
-            break;
-         case 0x3: // silence
-            iBlockLength = 4;
-            lSampleLength = *(uint16_t *)(pbPtr) + 1;
-            for (iBytePos = 0; iBytePos < lSampleLength; iBytePos++)
-            {
-               dwBit--;
-               if (!dwBit)
-               { // got all 8 bits?
-                  *pbTapeImagePtr++ = bByte;
-                  dwBit = 8;
-                  bByte = 0;
-               }
-            }
-            break;
-         case 0x4: // marker
-            iBlockLength = 3;
-            break;
-         case 0x5: // ascii
-            iBlockLength = (*(uint32_t *)(pbPtr) & 0x00ffffff) + 4;
-            break;
-      }
-      lOffset += iBlockLength;
-   }
-   fclose(pfileObject);
-
-   *pbTapeImagePtr = 0x20; // end with a pause block
-   *(uint16_t *)(pbTapeImagePtr+1) = 2000; // set the length to 2 seconds
-
-   pbTapeImageEnd = pbTapeImagePtr + 3;
-
-   Tape_Rewind();
-
-   sprintf(TAPE_NAME,"%s",pchFileName);
-
-   return 0;
-}
-
-int emulator_patch_ROM (void)
-{
-   char chPath[_MAX_PATH + 1];
    uint8_t *pbPtr;
 
-   strncpy(chPath, CPC.rom_path, sizeof(chPath)-2);
-   strcat(chPath, "/");
-   strncat(chPath, chROMFile[CPC.model], sizeof(chPath)-1 - strlen(chPath)); // determine the ROM image name for the selected model
-
-   if ((pfileObject = fopen(chPath, "rb")) != NULL)
+   // TODO load custom bios
+   switch(CPC.model)
    {
-      /* load CPC OS + Basic */
-      fread(pbROMlo, 2*16384, 1, pfileObject);
-      fclose(pfileObject);
+      case 0: // 464
+         memcpy(pbROM, OS_464, (32*1024)); // FIXME FOR CPC 464
+         break;
+              // 664
+      case 2: // 6128
+         memcpy(pbROM, OS_6128, (32*1024));
+         memmap_ROM[7] = (uint8_t*)&AMSDOS[0];
+         break;
+      case 3: // 6128+
+         if(cart_name[0] == '\0') {
+            cpr_load(&OS_6128P[0]);
+            if (pbCartridgePages[0] != NULL)
+               pbROMlo = pbCartridgePages[0];
+            LOGI("used internal bios!\n");
+         } else if (pbCartridgeImage != NULL) {
+            LOGI("loaded cart: %s\n", cart_name);
+         }
+         break;
    }
-   else 
-      return ERR_CPC_ROM_MISSING;
 
    if (CPC.keyboard)
    {
@@ -2468,6 +1161,10 @@ int emulator_patch_ROM (void)
          case 1: // 664
          case 2: // 6128
             pbPtr += 0x1eef; // location of the keyboard translation table
+            break;
+         case 3: // 6128+
+            if(cart_name[0] == '\0')
+               pbPtr += 0x1eef; // Only patch system cartridge
             break;
       }
 
@@ -2485,6 +1182,14 @@ int emulator_patch_ROM (void)
 void emulator_reset (bool bolMF2Reset)
 {
    int n;
+   if(CPC.model > 2){
+      if (pbCartridgePages[0] != NULL)
+         pbROMlo = pbCartridgePages[0];
+   }
+
+   asic_reset();
+   // FIXME - generate plus palette correctly
+   video_set_palette();
 
    // Z80
    memset(&z80, 0, sizeof(z80)); // clear all Z80 registers and support variables
@@ -2508,9 +1213,13 @@ void emulator_reset (bool bolMF2Reset)
    // CRTC
    crtc_reset();
 
+   asic.locked = true;
+
    // Gate Array
    memset(&GateArray, 0, sizeof(GateArray)); // clear GA data structure
    GateArray.scr_mode = GateArray.requested_scr_mode = 1; // set to mode 1
+   GateArray.registerPageOn = false;
+   GateArray.lower_ROM_bank = 0;
    ga_init_banking();
 
    // PPI
@@ -2551,9 +1260,6 @@ void emulator_reset (bool bolMF2Reset)
       memcpy(pbMF2ROM, pbMF2ROMbackup, 8192); // copy the MF2 ROM to its proper place
 }
 
-#include "rom/6128.h"
-#include "rom/amsdos.h"
-
 int emulator_init (void)
 {
    int iErr, iRomNum;
@@ -2565,20 +1271,21 @@ int emulator_init (void)
    (void)iRomNum;
    (void)iErr;
 
-   pbGPBuffer    = malloc(128*1024 * sizeof(uint8_t)); // attempt to allocate the general purpose buffer
-   pbRAM         = malloc(CPC.ram_size * 1024 * sizeof(uint8_t)); // allocate memory for desired amount of RAM
+   pbGPBuffer     = (uint8_t*) malloc(128 * 1024 * sizeof(uint8_t)); // attempt to allocate the general purpose buffer
+   pbRAM          = (uint8_t*) malloc(CPC.ram_size * 1024 * sizeof(uint8_t)); // allocate memory for desired amount of RAM
+   pbROM          = (uint8_t*) malloc(32 * 1024 * sizeof(uint8_t));
+   pbRegisterPage = (uint8_t*) malloc(16 * 1024 * sizeof(uint8_t));
 
-   pbROMlo       = (uint8_t *)&OS[0]; // CPC 6128
-
-   if (!pbGPBuffer || !pbRAM)
+   if (!pbGPBuffer || !pbRAM || !pbRegisterPage)
       return ERR_OUT_OF_MEMORY;
 
-   pbROMhi       = pbExpansionROM = (uint8_t *)pbROMlo + 16384;
+   pbROMlo = pbROM;
+   pbROMhi = pbExpansionROM = (uint8_t *)pbROMlo + 16384;
 
    memset(memmap_ROM, 0, sizeof(memmap_ROM[0]) * 256); // clear the expansion ROM map
    ga_init_banking(); // init the CPC memory banking map
 
-   memmap_ROM[7] = (uint8_t*)&AMSDOS[0];
+   emulator_select_ROM();
 
    CPC.mf2 = 0;
    crtc_init();
@@ -2592,6 +1299,9 @@ int emulator_init (void)
 void emulator_shutdown (void)
 {
    int iRomNum;
+
+   if(pbRegisterPage)
+      free(pbRegisterPage);
 
    if (pbMF2ROMbackup)
       free(pbMF2ROMbackup);
@@ -2609,6 +1319,31 @@ void emulator_shutdown (void)
       free(pbRAM);
    if (pbGPBuffer)
       free(pbGPBuffer);
+}
+
+int cart_insert (char *pchFileName) {
+
+   if(retro_computer_cfg.model != 3) {
+      fprintf(stderr, "Cartridge ERROR: Please select CPC6128+.\n");
+      return ERR_CPR_INVALID;
+   }
+
+   int result = cpr_fload(pchFileName);
+
+   if(result != 0) {
+      fprintf(stderr, "Load of cartridge failed. Aborting.\n");
+      return result;
+   }
+
+   sprintf(cart_name,"%s",pchFileName);
+
+   /* Restart emulator if initiated */
+   if(emu_status & COMPUTER_READY) {
+      emulator_shutdown();
+      emulator_init();
+   }
+
+   return 0;
 }
 
 int printer_start (void)
@@ -2663,47 +1398,97 @@ void audio_shutdown (void) {}
 void audio_pause (void) {}
 void audio_resume (void) {}
 
+uint32_t video_monitor_colour (double r, double g, double b)
+{
+   uint32_t red = (uint32_t)(r * (CPC.scr_intensity / 10.0) * 255);
+   if (red > 255) /* limit to the maximum */
+      red = 255;
+
+   uint32_t green = (uint32_t)(g * (CPC.scr_intensity / 10.0) * 255);
+   if (green > 255)
+      green = 255;
+
+   uint32_t blue = (uint32_t)(b * (CPC.scr_intensity / 10.0) * 255);
+   if (blue > 255)
+      blue = 255;
+
+   return RGB2COLOR(red, green, blue);
+}
+
+// Convert RGB color to GREEN LUMA
+// check colours_green vs colours_rgb, we could use here a logarithm.
+// https://en.wikipedia.org/wiki/Grayscale#Converting_color_to_grayscale
+#define G_LUMA_R     0.2427
+#define G_LUMA_G     0.6380
+#define G_LUMA_B     0.1293
+#define G_LUMA_BASE  0.071
+#define G_LUMA_COEF  0.100
+#define G_LUMA_PRIM  0.050
+
+uint32_t video_monitor_green(double r, double g, double b) {
+   double green_luma = ((G_LUMA_R * r) + (G_LUMA_G * g) + (G_LUMA_B * b));
+   green_luma += (G_LUMA_BASE + G_LUMA_PRIM - (G_LUMA_COEF * green_luma));
+
+   uint32_t green = (uint32_t) (green_luma * (CPC.scr_intensity / 10.0) * 255);
+
+   if (green > 255)
+      green = 255;
+
+   return RGB2COLOR(0, green, 0);
+}
+
+// Convert RGB to LUMA
+#define BN_LUMA_R     0.299
+#define BN_LUMA_G     0.587
+#define BN_LUMA_B     0.144
+uint32_t video_monitor_grey(double r, double g, double b) {
+   double grey_luma = ((BN_LUMA_R * r) + (BN_LUMA_G * g) + (BN_LUMA_B * b));
+   uint32_t grey = (uint32_t) (grey_luma * (CPC.scr_intensity / 10.0) * 255);
+
+   if (grey > 255)
+      grey = 255;
+
+   return RGB2COLOR(grey, grey, grey);
+}
+
+void video_update_tube() {
+   switch(CPC.scr_tube) {
+      case CPC_MONITOR_COLOR:
+         CPC.video_monitor = video_monitor_colour;
+         break;
+      case CPC_MONITOR_GREEN:
+         CPC.video_monitor = video_monitor_green;
+         break;
+      case CPC_MONITOR_WHITE:
+         CPC.video_monitor = video_monitor_grey;
+         break;
+   }
+}
+
+/**
+ * generate antialias values using 32/16bits macros
+ *
+ * RGB[10] 00CE60 || CC CC 00
+ * 00CE60 (10)    || C8 CC 00
+ */
+void video_set_palette_antialias (void)
+{
+   uint8_t r2,g2,b2;
+   r2=RGB2RED(colours[GateArray.ink_values[0]]) + RGB2RED(colours[GateArray.ink_values[1]]);
+   g2=RGB2GREEN(colours[GateArray.ink_values[0]]) + RGB2GREEN(colours[GateArray.ink_values[1]]);
+   b2=RGB2BLUE(colours[GateArray.ink_values[0]]) + RGB2BLUE(colours[GateArray.ink_values[1]]);
+   GateArray.palette[33] = (PIXEL_TYPE) RGB2COLOR(r2/2, g2/2, b2/2);
+}
+
 int video_set_palette (void)
 {
 
    int n;
-  
+   video_update_tube();
 
-   if (!CPC.scr_tube)
+   for (n = 0; n < 32; n++)
    {
-      for (n = 0; n < 32; n++)
-      {
-         uint32_t red, green, blue, colr;
-
-         red = (uint32_t)(colours_rgb[n][0] * (CPC.scr_intensity / 10.0) * 255);
-         if (red > 255) /* limit to the maximum */
-            red = 255;
-
-         green = (uint32_t)(colours_rgb[n][1] * (CPC.scr_intensity / 10.0) * 255);
-         if (green > 255)
-            green = 255;
-
-         blue = (uint32_t)(colours_rgb[n][2] * (CPC.scr_intensity / 10.0) * 255);
-         if (blue > 255)
-            blue = 255;
-
-         colr       = blue | (green << 8) | (red << 16);
-         colours[n] = colr ;//| (colr << 16);
-
-      }
-   }
-   else
-   {
-      for (n = 0; n < 32; n++)
-      {
-         uint32_t green = (uint32_t)(colours_green[n] * (CPC.scr_intensity / 10.0) * 255);
-
-         if (green > 255)
-            green = 255;
-
-         colours[n] = green << 8;
-
-      }
+      colours[n] = (PIXEL_TYPE) CPC.video_monitor(colours_rgb[n][0], colours_rgb[n][1], colours_rgb[n][2]);
    }
 
    for (n = 0; n < 17; n++)
@@ -2717,30 +1502,38 @@ int video_set_palette (void)
    return 0;
 }
 
-#define STYLE 3
-
 void video_set_style (void)
 {
-   if (STYLE == 3/*vid_plugin->half_pixels*/)
+   if (CPC.scr_style == 3) //384x272
    {
       dwXScale = 1;
       dwYScale = 1;
 
    }
-   else
+   else                    //768x544
    {
       dwXScale = 2;
-      dwYScale = 1;
+      dwYScale = 2;
    }
+   printf("model:%u, style: %u, dwScale: %ux%u, offset: %u\n", CPC.model, CPC.scr_style, dwXScale, dwYScale, CPC.scr_line_offs);
+
    switch (dwXScale)
    {
       case 1:
+      if (CPC.model > 2) {
+         CPC.scr_prerendernorm = (void(*)(void))prerender_normal_half_plus;
+      } else {
          CPC.scr_prerendernorm = (void(*)(void))prerender_normal_half;
+      }
          CPC.scr_prerenderbord = (void(*)(void))prerender_border_half;
          CPC.scr_prerendersync = (void(*)(void))prerender_sync_half;
          break;
       case 2:
+      if (CPC.model > 2) {
+         CPC.scr_prerendernorm = (void(*)(void))prerender_normal_plus;
+      } else {
          CPC.scr_prerendernorm = (void(*)(void))prerender_normal;
+      }
          CPC.scr_prerenderbord = (void(*)(void))prerender_border;
          CPC.scr_prerendersync = (void(*)(void))prerender_sync;
          break;
@@ -2749,35 +1542,39 @@ void video_set_style (void)
    switch(CPC.scr_bpp)
    {
       case 32:
-         CPC.scr_render = (void(*)(void))render32bpp;
-         break;
-      case 24:
-         CPC.scr_render = (void(*)(void))render24bpp;
+         if(dwYScale == 2)
+            CPC.scr_render = (void(*)(void))render32bpp_doubleY;
+         else
+            CPC.scr_render = (void(*)(void))render32bpp;
          break;
       case 16:
       case 15:
-         CPC.scr_render = (void(*)(void))render16bpp;
-         break;
-      case 8:
-         CPC.scr_render = (void(*)(void))render8bpp;
+      default:
+         if(dwYScale == 2)
+            CPC.scr_render = (void(*)(void))render16bpp_doubleY;
+         else
+            CPC.scr_render = (void(*)(void))render16bpp;
          break;
    }
+
 }
 
 int video_init (void)
-{ 
+{
    int error_code;
-   CPC.scr_bpp = 32;
+   CPC.scr_bpp = retro_getGfxBpp();
 
    error_code = video_set_palette(); // init CPC colours and hardware palette (in 8bpp mode)
    if (error_code)
-      return error_code; 
+      return error_code;
 
-   CPC.scr_bps       = WINDOW_WIDTH/*400*/ * 4 / 4;
+   CPC.scr_style     = retro_getStyle();
+   CPC.scr_bps       = retro_getGfxBps();
    CPC.scr_pos       = CPC.scr_base = (uint32_t *)&bmp[0];
-   CPC.scr_line_offs = CPC.scr_bps * 1;
+   CPC.scr_line_offs = ((CPC.scr_bps * (CPC.scr_style - 2)) // because is double height
+                         / (2 / PIXEL_BYTES) ) ;
 
-   video_set_style(); 
+   video_set_style();
    memset(bmp, 0, sizeof(bmp));
 
    return 0;
@@ -2840,7 +1637,7 @@ void getConfigValueString (char* pchFileName, char* pchSection,
    if ((pfoConfigFile = fopen(pchFileName, "r")) != NULL)
    {
       /* open the config file */
-      
+
       while(fgets(chLine, MAX_LINE_LEN, pfoConfigFile) != NULL)
       {
          /* grab one line */
@@ -2883,17 +1680,19 @@ void loadConfiguration (void)
    strcat(chFileName, "/cap32.cfg");
 
    memset(&CPC, 0, sizeof(CPC));
-   CPC.model = getConfigValueInt(chFileName, "system", "model", 2); // CPC 6128
 
-   if (CPC.model > 2)
+   //CPC.model = getConfigValueInt(chFileName, "system", "model", 2); // CPC 6128
+   CPC.model = retro_computer_cfg.model;
+   if (CPC.model > 3)
       CPC.model = 2;
 
    CPC.jumpers       = getConfigValueInt(chFileName, "system", "jumpers", 0x1e) & 0x1e; // OEM is Amstrad, video refresh is 50Hz
-   CPC.ram_size      = getConfigValueInt(chFileName, "system", "ram_size", 128) & 0x02c0; // 128KB RAM
+   //CPC.ram_size      = getConfigValueInt(chFileName, "system", "ram_size", 128) & 0x02c0; // 128KB RAM
+   CPC.ram_size = retro_computer_cfg.ram;
 
    if (CPC.ram_size > 576)
       CPC.ram_size   = 576;
-   else if ((CPC.model == 2) && (CPC.ram_size < 128))
+   else if ((CPC.model >= 2) && (CPC.ram_size < 128))
       CPC.ram_size   = 128; // minimum RAM size for CPC 6128 is 128KB
 
    CPC.speed = getConfigValueInt(chFileName, "system", "speed", DEF_SPEED_SETTING); // original CPC speed
@@ -2904,7 +1703,8 @@ void loadConfiguration (void)
    CPC.auto_pause    = getConfigValueInt(chFileName, "system", "auto_pause", 1) & 1;
    CPC.printer       = getConfigValueInt(chFileName, "system", "printer", 0) & 1;
    CPC.mf2           = getConfigValueInt(chFileName, "system", "mf2", 0) & 1;
-   CPC.keyboard      = getConfigValueInt(chFileName, "system", "keyboard", 0);
+   //CPC.keyboard      = getConfigValueInt(chFileName, "system", "keyboard", 0);
+   CPC.keyboard = retro_computer_cfg.lang;
 
    if (CPC.keyboard > MAX_ROM_MODS)
       CPC.keyboard = 0;
@@ -3134,11 +1934,12 @@ void doCleanUp (void)
 {
    printer_stop();
    emulator_shutdown();
-     
+
    dsk_eject(&driveA);
    dsk_eject(&driveB);
 
    tape_eject();
+   cpr_eject();
 
    if (zip_info.pchFileNames)
       free(zip_info.pchFileNames);
@@ -3157,244 +1958,48 @@ void emu_reset(void)
 	emulator_reset(false);
 }
 
-extern int retro_ui_finalized;
+void emu_restart(void)
+{
+   /* Reconfigure emulator */
+   emulator_shutdown();
+   emulator_init();
+
+   retro_computer_cfg.is_dirty = false;
+}
 
 void change_model(int val){
 
 	CPC.model=val;
 
-   if ((CPC.model == 2) && (CPC.ram_size < 128))
+   if ((CPC.model >= 2) && (CPC.ram_size < 128))
       CPC.ram_size   = 128; // minimum RAM size for CPC 6128 is 128KB
 
-   /* Reconfigure emulator */
-   emulator_shutdown();
-   emulator_init();
-//printf("change model %d ---------------\n",val);
+   retro_computer_cfg.is_dirty = true;
 }
 
 void change_ram(int val){
 
 	CPC.ram_size=val;
 
-   if ((CPC.model == 2) && (CPC.ram_size < 128))
+   if ((CPC.model >= 2) && (CPC.ram_size < 128))
       CPC.ram_size   = 128; // minimum RAM size for CPC 6128 is 128KB
 
-   /* Reconfigure emulator */
-   emulator_shutdown();
-   emulator_init();
-//printf("change ram %d ---------------\n",val);
+   retro_computer_cfg.is_dirty = true;
 }
 
-void retro_key_down(int key)
-{
-	int code;
-
-	if(key<512)
- 		code=KeySymToCPCKey[key];	
-	else code = CPC_KEY_NULL;
-	CPC_SetKey(code);
+uint8_t* get_ram_ptr() {
+	return pbRAM;
 }
 
-void retro_key_up(int key)
-{
-	int code;
-
-	if(key<512)
- 		code=KeySymToCPCKey[key];
-	else code = CPC_KEY_NULL;
-	CPC_ClearKey(code);
+size_t get_ram_size(void) {
+	return CPC.ram_size * 1024;
 }
 
-static int jflag[6]={0,0,0,0,0,0};
-static int jflag0[6]={0,0,0,0,0,0};
-
-void Keyhdl(unsigned char cpc_key,int press){
-
-	if(press)keyboard_matrix[(unsigned char)cpc_key >> 4] &= ~bit_values[(unsigned char)cpc_key & 7]; // key is being held down
-	else keyboard_matrix[(unsigned char)cpc_key >> 4] |= bit_values[(unsigned char)cpc_key & 7];
-
+void change_lang(int val){
+   CPC.keyboard=val;
+   retro_computer_cfg.is_dirty = true;
 }
 
-void retro_joy1(unsigned char joy1)
-{
-   //0x01,0x02,0x04,0x08,0x80
-   // UP  DWN  LEFT RGT  BTN0
-   // 0    1     2   3    4
-
-   //UP
-   if(joy1&0x01)
-   {
-      if(jflag[0]==0)
-      {
-         Keyhdl(0x60,1);
-         jflag[0]=1;
-      }
-   }
-   else
-   {
-      if(jflag[0]==1)
-      {
-         Keyhdl(0x60,0);
-         jflag[0]=0;
-      }
-   }
-
-   //Down
-   if(joy1&0x02){
-      if(jflag[1]==0){
-         Keyhdl(0x61,1);
-         jflag[1]=1;
-      }
-   }else {
-      if(jflag[1]==1){
-         Keyhdl(0x61,0);
-         jflag[1]=0;
-      }
-   }
-
-   //Left
-   if(joy1&0x04){
-      if(jflag[2]==0){
-         Keyhdl(0x62,1);
-         jflag[2]=1;
-      }
-   }else {
-      if(jflag[2]==1){
-         Keyhdl(0x62,0);
-         jflag[2]=0;
-      }
-   }
-
-   //Right
-   if(joy1&0x08){
-      if(jflag[3]==0){
-         Keyhdl(0x63,1);
-         jflag[3]=1;
-      }
-   }else {
-      if(jflag[3]==1){
-         Keyhdl(0x63,0);
-         jflag[3]=0;
-      }
-   }
-
-   //btn0
-   if(joy1&0x80){
-      if(jflag[4]==0){
-         Keyhdl(0x64,1);
-         jflag[4]=1;
-      }
-   }else {
-      if(jflag[4]==1){
-         Keyhdl(0x64,0);
-         jflag[4]=0;
-      }
-   }
-
-   //btn1
-   if(joy1&0x40){
-      if(jflag[5]==0){
-         Keyhdl(0x65,1);
-         jflag[5]=1;
-      }
-   }else {
-      if(jflag[5]==1){
-         Keyhdl(0x65,0);
-         jflag[5]=0;
-      }
-   }
-
-}
-
-void retro_joy0(unsigned char joy0)
-{
-   //0x01,0x02,0x04,0x08,0x80
-   // UP  DWN  LEFT RGT  BTN0
-   // 0    1     2   3    4
-
-   //UP
-   if(joy0&0x01)
-   {
-      if(jflag0[0]==0)
-      {
-         retro_key_down(RETROK_HOME);
-         jflag0[0]=1;
-      }
-   }
-   else
-   {
-      if(jflag0[0]==1)
-      {
-         retro_key_up(RETROK_HOME);
-         jflag0[0]=0;
-      }
-   }
-
-   //Down
-   if(joy0&0x02){
-      if(jflag0[1]==0){
-         retro_key_down(RETROK_END);
-         jflag0[1]=1;
-      }
-   }else {
-      if(jflag0[1]==1){
-         retro_key_up(RETROK_END);
-         jflag0[1]=0;
-      }
-   }
-
-   //Left
-   if(joy0&0x04){
-      if(jflag0[2]==0){
-         retro_key_down(RETROK_DELETE);
-         jflag0[2]=1;
-      }
-   }else {
-      if(jflag0[2]==1){
-         retro_key_up(RETROK_DELETE);
-         jflag0[2]=0;
-      }
-   }
-
-   //Right
-   if(joy0&0x08){
-      if(jflag0[3]==0){
-         retro_key_down(RETROK_PAGEDOWN);
-         jflag0[3]=1;
-      }
-   }else {
-      if(jflag0[3]==1){
-         retro_key_up(RETROK_PAGEDOWN);
-         jflag0[3]=0;
-      }
-   }
-
-   //btn0
-   if(joy0&0x80){
-      if(jflag0[4]==0){
-         retro_key_down(RETROK_INSERT); 
-         jflag0[4]=1;
-      }
-   }else {
-      if(jflag0[4]==1){
-         retro_key_up(RETROK_INSERT); 
-         jflag0[4]=0;
-      }
-   }
-
-   //btn1
-   if(joy0&0x40){
-      if(jflag0[5]==0){
-         retro_key_down(RETROK_PAGEUP); 
-         jflag0[5]=1;
-      }
-   }else {
-      if(jflag0[5]==1){
-         retro_key_up(RETROK_PAGEUP); 
-         jflag0[5]=0;
-      }
-   }
-}
 
 void mixsnd(void)
 {
@@ -3403,6 +2008,8 @@ void mixsnd(void)
 
    if(SND != 1)
       return;
+
+   retro_snd_mixer();
 
    p = (int16_t*)pbSndBuffer;
 
@@ -3413,7 +2020,6 @@ void mixsnd(void)
 
 int skel_main(int argc, char *argv[])
 {
-   retro_InitialiseKeyboardMapping();
    capmain(argc,argv);
    return 0;
 }
@@ -3439,31 +2045,38 @@ bool bolDone;
 #include "cpc_cat.h"
 
 static int cur_name_id  = 0;
-static int cur_name_top = 0;
 
 int cpc_dsk_system = 0;
 int
 cap32_disk_dir(char *FileName)
 {
-  cpc_dsk_system = 0;
-  int error = cpc_dsk_dir(FileName);
-  if (! error) {
-    if (cpc_dsk_num_entry > 20) {
-      int index;
-      for (index = 0; index < cpc_dsk_num_entry; index++) {
-        int cpos = 0;
-        for (cpos = 0; cpc_dsk_dirent[index][cpos]; cpos++) {
-          /* High number of files with no printable chars ? might be CPM */
-          if (cpc_dsk_dirent[index][cpos] < 32) {
-            cpc_dsk_system = 1;
-            cpc_dsk_num_entry = 0;
-            break;
-          }
-        }
+   int error = cpc_dsk_dir(FileName);
+   if (! error) {
+      cpc_dsk_system = (cpc_dsk_type == DSK_TYPE_SYSTEM);
+      printf("INFO-DSK: num: %d sys(%d)\n", cpc_dsk_num_entry, cpc_dsk_system);
+      if (cpc_dsk_num_entry > 20) {
+         int index;
+         for (index = 0; index < cpc_dsk_num_entry; index++) {
+            int cpos = 0;
+            printf("INFO: DIR-INIT: i(%d) p(%d) = %x\n", index, cpos, cpc_dsk_dirent[index][cpos]);
+            for (cpos = 0; cpc_dsk_dirent[index][cpos]; cpos++) {
+               /* with no printable chars in first ? might be CPM */
+               if (cpc_dsk_dirent[index][cpos] < 32) {
+                  if(!index) {
+                     cpc_dsk_num_entry = 0;
+                  } else {
+                     // some filenames are loaded used it! -- fixed cracked custom DSKs
+                     cpc_dsk_num_entry = index;
+                  }
+                  printf("DSK_LOAD INFO-SYS: dsk: i(%d) p(%d) = %d \n", index, cpos, cpc_dsk_dirent[index][cpos]);
+                  break;
+               }
+            }
+         }
+      } else {
       }
-    }
-  }
-  return error;
+   }
+   return error;
 }
 
 int retro_disk_auto()
@@ -3496,7 +2109,7 @@ int retro_disk_auto()
         if (! strcasecmp(scan+1, "")) {
           if (first_spc == -1) first_spc = index;
           found = 1;
-        } else 
+        } else
         if (! strcasecmp(scan+1, "BIN")) {
           if (first_bin == -1) first_bin = index;
           found = 1;
@@ -3508,22 +2121,22 @@ int retro_disk_auto()
       if (cpc_dsk_system) {
         strcpy(Buffer, "|CPM");
       } else {
+         strcpy(Buffer, "CAT");
 			printf("autoload not found\n");
-			return -1;
       }
 
     } else {
       if (first_bas != -1) cur_name_id = first_bas;
-      else 
+      else
       if (first_spc != -1) cur_name_id = first_spc;
-      else 
+      else
       if (first_bin != -1) cur_name_id = first_bin;
 
       sprintf(Buffer, "RUN\"%s", cpc_dsk_dirent[cur_name_id]);
     }
   }
 
-  //if (CPC.psp_explore_disk == CPC_EXPLORE_FULL_AUTO) 
+  //if (CPC.psp_explore_disk == CPC_EXPLORE_FULL_AUTO)
   {
     strcat(Buffer, "\n");
   }
@@ -3537,34 +2150,36 @@ int retro_disk_auto()
 int attach_disk(char *arv, int drive)
 {
 	int result = 1;
-	
-	if(drive==0)
+
+	if(!drive) {
 		if((result = dsk_load( arv, &driveA, 'A')) == 0)
 		{
 			sprintf(DISKA_NAME,"%s",arv);
-			cap32_disk_dir(arv);
+			result = cap32_disk_dir(arv);
+         if(result)
+            printf("error dsk: %d\n", result);
 		}
-	else
+	} else {
 		if((result = dsk_load( arv, &driveB, 'B')) == 0)
-		{   
-			sprintf(DISKB_NAME,"%s",arv); 
+		{
+			sprintf(DISKB_NAME,"%s",arv);
 			cap32_disk_dir(arv);
 		}
-
+   }
    return result;
 }
 
 int detach_disk(int drive)
 {
-   if(drive==0)
+   if(!drive)
    {
       dsk_eject(&driveA);
-      sprintf(DISKA_NAME,"\0"); 
+      DISKA_NAME[0] = '\0';
    }
    else
    {
       dsk_eject(&driveB);
-      sprintf(DISKB_NAME,"\0"); 
+      DISKB_NAME[0] = '\0';
    }
 
    return 0;
@@ -3578,7 +2193,7 @@ int loadadsk (char *arv,int drive)
 	  {
 		  retro_disk_auto();
 		  sprintf(RPATH,"%s%d.SNA",arv,drive);
-	  }		  
+	  }
    }
    else if( HandleExtension(arv,"sna") || HandleExtension(arv,"SNA") )
    {
@@ -3588,20 +2203,6 @@ int loadadsk (char *arv,int drive)
    return 0;
 }
 
-void play_tape(){
-
-	if (pbTapeImage) {
-
-		if (CPC.tape_play_button) {
-			CPC.tape_play_button = 0;
-		} else {
-			CPC.tape_play_button = 0x10;
-		}
-
-	}
-}
-
-
 void check_kbd_command()
 {
 
@@ -3610,13 +2211,13 @@ void check_kbd_command()
    	else if (autoboot_delay==AUTODELAY)
    	{
    		if (!autorun)
-   			kbd_runcmd=false; 
-     	
+   			kbd_runcmd=false;
+
      		autoboot_delay++;
    	}
 
 	if(kbd_runcmd==true && autoboot_delay>AUTODELAY){
-    
+
 	  	static int pair=-1;
 
       		pair=-pair;
@@ -3701,7 +2302,7 @@ int capmain (int argc, char **argv)
    }
 
    /* init Z80 emulation */
-   z80_init_tables(); 
+   z80_init_tables();
 
    if (video_init())
    {
@@ -3732,8 +2333,7 @@ int capmain (int argc, char **argv)
    iExitCondition    = EC_FRAME_COMPLETE;
    bolDone           = false;
 
-   retro_ui_finalized=1;
+   emu_status = COMPUTER_READY; // set computer init as completed
 
    return 0;
 }
-

@@ -21,16 +21,15 @@ extern void play_tape();
 extern void Screen_SetFullUpdate(int scr);
 extern void vkbd_key(int key,int pressed);
 
-extern long GetTicks(void); 
+extern long GetTicks(void);
 
 extern retro_input_poll_t input_poll_cb;
 extern retro_input_state_t input_state_cb;
 
-extern bool retro_load_ok;
 extern char RPATH[512];
 
 //EMU FLAGS
-int SHOWKEY=-1;
+int showkeyb=-1;
 int SHIFTON=-1;
 int KBMOD=-1;
 int RSTOPON=-1;
@@ -58,9 +57,9 @@ char Core_old_Key_Sate[512];
 
 #include "nuklear.h"
 #include "nuklear_retro_soft.h"
+#include "retro_events.h"
 
 static RSDL_Surface *screen_surface;
-extern unsigned int *Retro_Screen;
 extern void restore_bgk();
 extern void save_bkg();
 
@@ -87,11 +86,15 @@ static nk_retro_Font *RSDL_font;
 /* Forward declarations */
 void app_vkb_handle();
 
-int app_init()
+int app_init(int width, int height)
 {
-    screen_surface=Retro_CreateRGBSurface32(retrow,retroh,32,0,0,0,0);
+    #ifdef M16B
+    screen_surface=Retro_CreateRGBSurface16(width,height,16,0,0,0,0);
+    #else
+    screen_surface=Retro_CreateRGBSurface32(width,height,32,0,0,0,0);
+    #endif
 
-    Retro_Screen=(unsigned int *)screen_surface->pixels;
+    Retro_Screen=(PIXEL_TYPE *)screen_surface->pixels;
 
     RSDL_font = (nk_retro_Font*)calloc(1, sizeof(nk_retro_Font));
     RSDL_font->width = 4;
@@ -100,7 +103,7 @@ int app_init()
         return -1;
 
     /* GUI */
-    ctx = nk_retro_init(RSDL_font,screen_surface,retrow,retroh);
+    ctx = nk_retro_init(RSDL_font,screen_surface,width,height);
 
     /* style.c */
     /* THEME_BLACK, THEME_WHITE, THEME_RED, THEME_BLUE, THEME_DARK */
@@ -114,7 +117,7 @@ int app_init()
 	memset(Core_Key_Sate,0,512);
 	memset(Core_old_Key_Sate ,0, sizeof(Core_old_Key_Sate));
 
-    printf("Init nuklear %d\n",0);
+    printf("Init nuklear %ux%u\n", width, height);
 
  return 0;
 }
@@ -154,7 +157,7 @@ int app_render(int poll)
 
 	if(poll==0)
 		app_vkb_handle();
-	else 
+	else
 		restore_bgk();
 
 	app_event(poll);
@@ -176,8 +179,8 @@ void app_vkb_handle()
    int i;
 
    if(oldi!=-1)
-   {  
-      vkbd_key(oldi,0);      
+   {
+      vkbd_key(oldi,0);
       oldi=-1;
    }
 
@@ -202,10 +205,10 @@ void app_vkb_handle()
          }
          else if(i==-4)
          {
-            //VKbd show/hide 			
+            //VKbd show/hide
             oldi=-1;
            // Screen_SetFullUpdate(0);
-            SHOWKEY=-SHOWKEY;
+            showkeyb=-showkeyb;
          }
          else if(i==-5)
          {
@@ -244,7 +247,7 @@ void app_vkb_handle()
                oldi=-1;
             }
             else if(i==0x27/*i==-11*/) //CTRL
-            {     
+            {
 
                CTRLON=-CTRLON;
 
@@ -252,30 +255,30 @@ void app_vkb_handle()
             }
 			else if(i==-12) //RSTOP
             {
-            
+
                RSTOPON=-RSTOPON;
 
                oldi=-1;
             }
 			else if(i==-13) //GUI
-            {     
+            {
 			    pauseg=1;
 
-				SHOWKEY=-SHOWKEY;
+				showkeyb=-showkeyb;
 
 				//Screen_SetFullUpdate(0);
                oldi=-1;
             }
 			else if(i==-14) //JOY PORT TOGGLE
-            {    
+            {
 
-               SHOWKEY=-SHOWKEY;
+               showkeyb=-showkeyb;
                oldi=-1;
             }
             else
             {
                oldi=i;
- 	    	vkbd_key(oldi,1);            
+ 	    	vkbd_key(oldi,1);
             }
 
          }
@@ -283,18 +286,67 @@ void app_vkb_handle()
 
 }
 
-// Core input Key(not GUI) 
+int Core_PollEvent()
+{
+   input_poll_cb(); // retroarch get keys
+
+   // --- Player 1/2 Joystick code
+   if(showkeyb < 0){
+      ev_joysticks();
+   } else {
+      ev_vkeyboard();
+   }
+
+   // --- Keyboard code --
+   // TODO: clean and change to callback
+   //if(showkeyb==-1 && pauseg==0)Core_Processkey();
+
+   int i = 0;
+   static int kbt[4]={0,0,0,0};
+
+   // F9 vkbd
+   if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F9) && kbt[i]==0){
+      kbt[i]=1;
+   }
+   else if ( kbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F9) ){
+      kbt[i]=0;
+      showkeyb=-showkeyb;
+   }
+   // F10 GUI
+   i=1;
+   if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F10) && kbt[i]==0){
+      kbt[i]=1;
+   }
+   else if ( kbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F10) ){
+      kbt[i]=0;
+      pauseg=1;
+      save_bkg();
+      printf("enter gui!\n");
+   }
+
+
+   return 1;
+
+}
+
+/**
+ * old functions - temporarily keep as reference
+ *     trying to simplify and optimize previous implementation
+ */
+#if 0
+
+// Core input Key(not GUI)
 void Core_Processkey()
 {
 	int i;
 
 	for(i=0;i<320;i++)
         	Core_Key_Sate[i]=input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0,i) ? 0x80: 0;
-   
+
 	if(memcmp( Core_Key_Sate,Core_old_Key_Sate , sizeof(Core_Key_Sate) ) )
 	 	for(i=0;i<320;i++)
 			if(Core_Key_Sate[i] && Core_Key_Sate[i]!=Core_old_Key_Sate[i]  )
-        	{	
+        	{
 				if(i==RETROK_F12){
 					//play_tape();
 					continue;
@@ -302,13 +354,13 @@ void Core_Processkey()
 
 				if(i==RETROK_LALT){
 					//KBMOD=-KBMOD;
-					printf("Modifier alt pressed %d \n",KBMOD); 
+					printf("Modifier alt pressed %d \n",KBMOD);
 					continue;
 				}
 				//printf("press: %d \n",i);
 				retro_key_down(i);
-	
-        	}	
+
+        	}
         	else if ( !Core_Key_Sate[i] && Core_Key_Sate[i]!=Core_old_Key_Sate[i]  )
         	{
 				if(i==RETROK_F12){
@@ -318,35 +370,35 @@ void Core_Processkey()
 /*
 				if(i==RETROK_RCTRL){
 					CTRLON=-CTRLON;
-					printf("Modifier crtl released %d \n",CTRLON); 
+					printf("Modifier crtl released %d \n",CTRLON);
 					continue;
 				}
 				if(i==RETROK_RSHIFT){
 					SHIFTON=-SHIFTON;
-					printf("Modifier shift released %d \n",SHIFTON); 
+					printf("Modifier shift released %d \n",SHIFTON);
 					continue;
 				}
 */
 				if(i==RETROK_LALT){
 					KBMOD=-KBMOD;
-					printf("Modifier alt released %d \n",KBMOD); 
+					printf("Modifier alt released %d \n",KBMOD);
 					continue;
 				}
 				//printf("release: %d \n",i);
 				retro_key_up(i);
-	
-        	}	
+
+        	}
 
 	memcpy(Core_old_Key_Sate,Core_Key_Sate , sizeof(Core_Key_Sate) );
 
 }
 
-// Core input (not GUI) 
-int Core_PollEvent()
+// Core input (not GUI)
+int Core_PollEvent_old()
 {
     //   RETRO        B    Y    SLT  STA  UP   DWN  LEFT RGT  A    X    L    R    L2   R2   L3   R3
     //   INDEX        0    1    2    3    4    5    6    7    8    9    10   11   12   13   14   15
-    //   AMSTRAD      RUN  VKB  M/J  RTRN UP   DWN  LEFT RGT  B1   B2   CAT  STAT RST  TAPE ?    ? 
+    //   AMSTRAD      RUN  VKB  M/J  RTRN UP   DWN  LEFT RGT  B1   B2   CAT  STAT RST  TAPE ?    ?
 
    int i,j;
    static int jbt[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -356,7 +408,9 @@ int Core_PollEvent()
    MXjoy[0]=0;
    MXjoy[1]=0;
 
-   if(!retro_load_ok)return 1;
+   if(emu_status != COMPUTER_READY)
+      return 1;
+
    input_poll_cb();
 
    int mouse_l;
@@ -364,32 +418,11 @@ int Core_PollEvent()
    int16_t mouse_x,mouse_y;
    mouse_x=mouse_y=0;
 
-   if(SHOWKEY==-1 && pauseg==0)Core_Processkey();
+   if(showkeyb==-1 && pauseg==0)Core_Processkey();
 
-   // F9 vkbd
-   i=0;
-   if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F9) && kbt[i]==0){ 
-      kbt[i]=1;
-   }   
-   else if ( kbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F9) ){
-      kbt[i]=0;
-      SHOWKEY=-SHOWKEY;
-   }
-   // F10 GUI
-   i=1;
-   if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F10) && kbt[i]==0){ 
-      kbt[i]=1;
-   }   
-   else if ( kbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_F10) ){
-      kbt[i]=0;
-      pauseg=1;
-      save_bkg();
-      printf("enter gui!\n");
-   }
-
-/*  
+/*
 if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
-	
+
     i=2;//mouse/joy toggle
    if ( input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, i) && jbt[i]==0 )
       jbt[i]=1;
@@ -403,22 +436,19 @@ if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
 
 if(pauseg==0){ // if emulation running
 
-	  //Joy mode
-
-    for(j=0;j<2;j++){
-
-      for(i=4;i<10;i++)
-      {
-         if( input_state_cb(j, RETRO_DEVICE_JOYPAD, 0, i))
-            MXjoy[j] |= vbt[i]; // Joy press		
+	//Joy mode - only when keyboard is not selected
+   if(amstrad_devices[0]!=RETRO_DEVICE_AMSTRAD_KEYBOARD){
+      for(j=0;j<2;j++) {
+         for(i=4;i<10;i++) {
+            if( input_state_cb(j, RETRO_DEVICE_JOYPAD, 0, i))
+               MXjoy[j] |= vbt[i]; // Joy press
+         }
+         if(showkeyb==-1) {
+		      if(j==0)retro_joy0(MXjoy[j]);
+		      else if (j==1)retro_joy1(MXjoy[j]);
+         }
       }
-
-      if(SHOWKEY==-1){
-		if(j==0)retro_joy0(MXjoy[j]);
-		else if (j==1)retro_joy1(MXjoy[j]);
-      }
-
-    }
+   }
 
 if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
    //shortcut for joy mode only
@@ -429,7 +459,7 @@ if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
    else if ( jbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, i) )
    {
       jbt[i]=0;
-      SHOWKEY=-SHOWKEY;
+      showkeyb=-showkeyb;
    }
 
    i=3;//type ENTER
@@ -449,7 +479,7 @@ if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
 	  kbd_buf_feed("RUN\"");
    }
 
-   i=10;//Type CAT\n 
+   i=10;//Type CAT\n
    if ( input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, i) && jbt[i]==0 )
       jbt[i]=1;
    else if ( jbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, i) ){
@@ -472,7 +502,7 @@ if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
       jbt[i]=1;
    else if ( jbt[i]==1 && ! input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, i) ){
       jbt[i]=0;
-      emu_reset();		
+      emu_reset();
    }
 
    i=13;//auto load tape
@@ -493,4 +523,4 @@ if(amstrad_devices[0]==RETRO_DEVICE_AMSTRAD_JOYSTICK){
 return 1;
 
 }
-
+#endif

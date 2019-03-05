@@ -1,4 +1,4 @@
-/* Copyright (C) 2018 
+/* Copyright (C) 2018
  *
  * Permission is hereby granted, free of charge,
  * to any person obtaining a copy of this software and associated documentation files (the "Software"),
@@ -16,26 +16,34 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef DISK_CONTROL_H__
-#define DISK_CONTROL_H__
+#ifndef RETRO_SND_H__
+#define RETRO_SND_H__
 
+#include <stdint.h>
 #include <stdbool.h>
 
-#define DC_MAX_SIZE 20
+//*****************************************************************************
+// File helpers functions
 
-struct dc_storage{
-	char* command;
-	char* files[DC_MAX_SIZE];
-	unsigned count;
-	int index;
-	bool eject_state;
+enum retro_samples_snd
+{
+   SND_FDCMOTOR = 0,
+   SND_FDCREAD  = 1,
+   SND_FDCSEEK  = 2,
+   SND_LAST     = 3
 };
 
-typedef struct dc_storage dc_storage;
+typedef enum
+{
+   ST_OFF = 0,
+   ST_ON,
+   ST_LOOP
+} audio_status_t;
 
-dc_storage* dc_create(void);
-void dc_parse_m3u(dc_storage* dc, char* m3u_file);
-bool dc_add_file(dc_storage* dc, char* filename);
-void dc_free(dc_storage* dc);
+bool init_retro_snd(int16_t* pbuffer);
+void free_retro_snd();
+
+void retro_snd_cmd(int snd_type, audio_status_t new_status);
+void retro_snd_mixer();
 
 #endif
